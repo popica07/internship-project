@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+
+# Secrets
+.env
+
+# Data (never commit raw or processed data)
+data/raw/*
+data/processed/*
+data/simulator/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/simulator/.gitkeep
+
+# Experiment tracking / outputs (auto-generated)
+experiments/*
+!experiments/.gitkeep
+mlruns/
+outputs/*
+!outputs/.gitkeep
+
+# DVC cache
+.dvc/cache
+
+# OS
+.DS_Store
