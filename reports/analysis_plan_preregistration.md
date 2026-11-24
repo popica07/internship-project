@@ -273,3 +273,55 @@ therefore defined as the **median of the 200 per-resample cost-minimising
 thresholds** (a bagged threshold). That keeps the stated intent, which is to
 reduce dependence on the 39 validation positives. Everything else is
 unchanged.
+
+---
+
+## Selection protocol v2 + C1-R (registered 2026-11-24, after C1, before any run below)
+
+**Why.** C1 showed that the registered selection fold (validate on 2022, 39
+KEV) cannot select models: LightGBM was best on validation and weakest of the
+GBMs on test, and tuning made LR worse. **C1's registered verdict stands
+(H2 and H1b not supported) and is reported as the primary C1 result.**
+Everything below is a revision made *after* seeing C1's test results. C1-R
+is therefore labelled post-hoc with respect to C1, while protocol v2 is
+prospective and binding for C2–C6.
+
+**What v2 changes, and why it is not tuned to C1's outcome.** The change
+follows one mechanism, too few validation positives, and was chosen by
+counting positives (a data property), not by looking at any model's score:
+
+- *Validation window:* CVEs published 2021-05-01 → 2022-12-31 (2021-05-01 is
+  the first EPSS archive), scored at their first snapshot like test, with
+  already-known CVEs excluded like test.
+- *Fold training set:* CVEs published < 2021-05-01, features as of
+  2021-05-01.
+- *Fold labels:* KEV as of 2023-01-01 (the split date T) for both fold
+  training and fold validation. This is exactly what was knowable when the B2
+  model was built at T, so nothing after T is used. The C1 fold instead used
+  KEV as of each fold's own start, which left almost nothing to learn from.
+- Effect: 652 fold-training positives (was 309) and **145 validation
+  positives (was 39)**.
+- Same 20 configurations per family as C1 (same sampling seeds), one fit
+  each (seed 0), selection by validation PR-AUC. Only the fold changes.
+
+Stated caveats: (1) as in the C1 fold, EPSS v1 files (2021 to early 2022)
+have no percentile, so `epss_pit_pct` is missing for fold-training rows;
+(2) validation labels for 2021 CVEs had a longer observation window than for
+2022 CVEs.
+
+**Selection-reliability diagnostic (new, never used for selection).** All
+126 searched configurations (6 × (20 + default)) are fitted once on the full
+training set (seed 0) and scored on test. For each fold (C1 fold, v2 fold)
+we report the Spearman correlation between validation PR-AUC and test
+PR-AUC, within each family and pooled. This measures whether a fold can
+select models at all. It is the evidence for or against v2, and it is
+reported whatever it shows.
+
+**C1-R.** The v2-selected configuration per family is refitted with 10 seeds
+on the full training set and tested once. H2 and H1b are re-tested exactly as
+registered in the Study C addendum (best-validation GBM vs LR and DT;
+best-validation model overall vs point-in-time EPSS; paired bootstrap).
+Reported as "under protocol v2 (post-hoc for C1)", next to the C1 primary
+result, never instead of it.
+
+**Binding for C2–C6:** model and hyperparameter selection use the v2 fold.
