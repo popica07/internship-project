@@ -169,3 +169,12 @@ validation year (train < 2022-01-01, validate on 2022, KEV as of 2023-01-01),
 never on test. Compared policies: B2 model at its chosen threshold, CVSS ≥ 7,
 CVSS ≥ 9, remediate-all, remediate-none; plus a fixed monthly remediation
 budget (top-k per month). Calibration (Brier, ECE) of B2 is reported first.
+
+**Deviation (2026-11-24, before B5 ran — a data property, not a result):** KEV
+was launched on 2021-11-03, so a 365-day-horizon label is 0 for *every* CVE
+published in 2016–2019 (14 positives in 2020). Training years 2018–2021 would
+train on no positives. B5 therefore uses `N ∈ {2021, 2022, 2023, 2024}`, test
+years `N+1..N+3` up to 2025, where 2025 is restricted to CVEs published by
+2025-11-23 (the last date with a complete 365-day horizon). 2021 itself is
+partially affected (KEV did not yet exist for its first ten months) — stated
+as a caveat on the `N = 2021` row.
