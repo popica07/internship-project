@@ -107,3 +107,65 @@ and any field derived from it; anything computed after the split date.
 5. **KEV is a lagging, partial ground truth** — it records exploitation that was
    *observed and published*, so absence of KEV membership is not evidence of
    non-exploitation. This bounds the ceiling on any B2 result.
+
+---
+
+## Study B design addendum (registered 2026-11-24, after B1, before any B2–B6 model)
+
+Fixed before any learned model was trained. B1 (fixed orderings, no training)
+had run; nothing below was tuned on a model result.
+
+**Scoring date (point-in-time features).** A model built at split date `T`
+scores each CVE as it would have been scored in practice:
+- training CVEs (published < `T`): features as of `T`;
+- test CVEs: features as of the first monthly EPSS snapshot on or after
+  publication (1st of each month, 2021-05 onward; the 2026-11-23 download for
+  the last weeks). Mean lag ≈ 15 days.
+
+**Evaluation set for B2–B4/B6.** Test CVEs already in KEV on their scoring date
+are excluded: an analyst would already know, so there is nothing to predict.
+The number excluded is reported. Every scorer, B1 baselines included, is
+re-evaluated on this same set, so all comparisons are like for like.
+
+**Features — primary (strict point-in-time):** CVSS base score, CVSS severity
+(ordinal), CVSS version, description text (TF-IDF → 64-d SVD, fitted on
+training text only), point-in-time EPSS score and percentile.
+- `public_exploit` / `has_patch` are moved to a **sensitivity** run. They come
+  from NVD reference tags *as of today*, and NVD adds `Exploit` tags
+  retroactively, often after exploitation is public — the same leakage class as
+  EPSS-current. Stricter than the original plan, decided before any result.
+- "CVE age at split date" is **dropped**: training ages span decades while test
+  ages span days, so the feature can only encode KEV lag, not risk.
+- Residual threat, stated not fixed: CVSS scores and descriptions are also
+  today's versions; NVD rarely rescores, so this is minor.
+
+**Models.** B2 primary: `HistGradientBoostingClassifier` (scikit-learn GBM; the
+LightGBM build needs `libomp`, absent on this machine — LightGBM/XGBoost/
+CatBoost belong to C1 anyway). Reference: L2-regularised logistic regression.
+No class re-weighting, so probabilities stay calibratable for B6. 10 seeds.
+
+**Labels.** As registered above: train = KEV as of `T`; test = KEV as of the
+data snapshot. Sensitivity: train = KEV as of today.
+
+**B3 (EPSS regression).** Target: logit of EPSS. Training target = EPSS as of
+`T` (known at `T`); EPSS features excluded (it is the target). Evaluated as a
+regression (Spearman ρ against today's EPSS on test) and as a KEV ranker.
+
+**B4 (ranking).** Every scorer ranks each *monthly* batch of test CVEs — the
+queue an analyst actually works. Metrics per month (P@10, NDCG@10, MAP, MRR);
+Friedman across scorers with months as blocks, Nemenyi post-hoc, Wilcoxon for
+B2 vs CVSS v3. Months with no KEV positive are excluded (metrics undefined).
+
+**B5 (temporal drift).** Train on publication year `N`, test on `N+1..N+3`,
+`N ∈ {2018,…,2021}`. To separate drift from KEV lag (B1 finding), labels use a
+**fixed 365-day horizon**: positive iff added to KEV within 365 days of
+publication, for train and test alike; only test years whose every CVE has
+had 365 days (≤ 2024) are used. EPSS is excluded from B5 features (no
+archive before 2021, so it would be absent for most `N`). H5 is tested here.
+
+**B6 (cost-sensitive).** No bank cost data exists, so the cost ratio
+`C_FN / C_FP` is swept over {10, 50, 100, 500}. Thresholds are chosen on a
+validation year (train < 2022-01-01, validate on 2022, KEV as of 2023-01-01),
+never on test. Compared policies: B2 model at its chosen threshold, CVSS ≥ 7,
+CVSS ≥ 9, remediate-all, remediate-none; plus a fixed monthly remediation
+budget (top-k per month). Calibration (Brier, ECE) of B2 is reported first.
