@@ -263,3 +263,13 @@ months with < 3 positives dropped (count reported). Decay is summarised as
 the slope of that margin on months since the end of the training year, per N,
 with a bootstrap CI over months. The registered B5 result (ρ = −0.53,
 p = 0.14) remains the H5 test.
+
+**Deviation (2026-11-24, before B6-R ran — a property of the definition, not a
+result):** as written, B6-R is identical to the primary B6 rule. Cost is
+linear in the sample weights and a bootstrap resample has expected weight 1
+per CVE, so the *mean* bootstrap cost of any threshold equals its cost on
+the original validation set, and the argmin is the same threshold. B6-R is
+therefore defined as the **median of the 200 per-resample cost-minimising
+thresholds** (a bagged threshold). That keeps the stated intent, which is to
+reduce dependence on the 39 validation positives. Everything else is
+unchanged.
