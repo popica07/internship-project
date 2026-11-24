@@ -325,3 +325,139 @@ Reported as "under protocol v2 (post-hoc for C1)", next to the C1 primary
 result, never instead of it.
 
 **Binding for C2–C6:** model and hyperparameter selection use the v2 fold.
+
+---
+
+## Study C addendum 2 — C2–C6 design (registered 2026-11-24, after C1/C1-R, before any C2–C6 model)
+
+Written after C1 and C1-R and before any C2–C6 model was fitted. The only
+things run beforehand were (a) caching the C1-R feature matrices
+(`src/models/study_c_data.py`, byte-identical to C1-R's) and (b) a one-epoch
+**speed** benchmark of the three deep models on the training matrix (no
+validation or test score was computed). The benchmark (MLP ≈ 0.3 s/epoch,
+TabNet ≈ 9 s, FT-Transformer 30–130 s on 5 threads) is the only reason the
+deep-model search budgets below are smaller than C1's.
+
+**Common to C2–C6.** Data, features, labels and the test set are C1-R's (B2
+evaluation set: 226,463 CVEs, 309 KEV). Selection always uses the v2 fold
+(162,231 / 652 train, 41,354 / 145 validation). 10 seeds (0–9) for every
+final model. Thread count 5. Test is touched once per final model.
+Monthly analyses use B4's 46 monthly batches (scoring date); per-month
+metrics are computed per seed and then averaged over seeds.
+
+### C2 — learning-to-rank (H3)
+
+*Query groups.* Training rows all share one scoring date, so a training query
+is a **publication month** (that month's new CVEs = one queue). Validation and
+test queries are scoring-date months (B4 batches).
+
+*Contenders (six, one function class).* All are gradient-boosted trees, so
+only the **objective** varies:
+
+| objective type | contender | library objective |
+|---|---|---|
+| pointwise | XGBoost-binary | `binary:logistic` |
+| pointwise | LightGBM-binary | `binary` |
+| pairwise (RankNet loss) | XGBoost-pairwise | `rank:pairwise`, pair method `mean`, 8 pairs/sample |
+| listwise (LambdaMART) | XGBoost-LambdaMART | `rank:ndcg`, pair method `topk`, k = 100 |
+| listwise (LambdaMART) | LightGBM-LambdaMART | `lambdarank`, truncation level 100 |
+| listwise | LightGBM-XE-NDCG | `rank_xendcg` |
+
+RankNet is implemented as its pairwise logistic loss on boosted trees, not as
+a neural network: that keeps the model class fixed so H3 isolates the
+objective. (Neural models are C3.)
+
+*Search.* Each XGBoost contender re-uses **the exact 20 C1 XGBoost draws +
+default**; each LightGBM contender the exact 20 C1 LightGBM draws + default.
+One fit each (seed 0) on the v2 fold. **Selection metric for all six
+(pointwise included): mean monthly NDCG@100 over the 20 validation months**
+(H3's metric, so pointwise and ranking contenders are selected by the same
+criterion; this may pick a different pointwise config than C1-R did).
+
+*H3 (operationalised now).* "LambdaMART" = the better-on-validation of the
+two LambdaMART contenders; "pointwise" = the better-on-validation of the two
+pointwise contenders. Statistic: per-month test NDCG@100 (46 months, seed
+averaged), difference LambdaMART − pointwise. **H3 is supported if the 95%
+paired bootstrap CI over months (2,000 resamples) of the mean difference is
+above 0.** Wilcoxon signed-rank is reported alongside. Secondary: global
+test NDCG@100, PR-AUC and P@100 by the C1 paired bootstrap; Friedman/Nemenyi
+across the six contenders on monthly NDCG@100 and MAP.
+
+### C3 — deep tabular models (H4)
+
+*Models.* MLP (PyTorch), TabNet (`pytorch-tabnet` 4.1.0), FT-Transformer
+(own PyTorch implementation after Gorishniy et al. 2021: per-feature linear
+tokenizer + [CLS], pre-norm Transformer blocks; GELU feed-forward instead of
+ReGLU). Inputs: median imputation + missing indicators + standard scaling,
+fitted on the training rows (74 columns). Unweighted binary cross-entropy,
+AdamW (TabNet: its own Adam), **no early stopping** (epochs are searched, as
+tree count was in C1), no class weighting.
+
+*Search (budget fixed by the speed benchmark):* MLP 20 configs, TabNet 10,
+FT-Transformer 8, sampled with seed 0, one fit each on the v2 fold, selected
+by validation PR-AUC (as C1-R).
+
+| model | space |
+|---|---|
+| MLP | layers 1–3; width {64, 128, 256}; dropout [0, 0.3]; lr log [1e-4, 3e-3]; weight decay log [1e-6, 1e-3]; epochs {5, 10, 20}; batch 1024 |
+| TabNet | n_d = n_a {8, 16, 32}; n_steps 3–6; gamma [1.0, 2.0]; lambda_sparse log [1e-6, 1e-3]; lr log [5e-3, 3e-2]; epochs {5, 10, 20}; batch 4096, virtual batch 256 |
+| FT-Transformer | d_token {32, 64}; blocks {1, 2}; 4 heads; attention dropout [0, 0.2]; FFN dropout [0, 0.2]; lr log [1e-4, 1e-3]; weight decay log [1e-6, 1e-4]; epochs {2, 4, 6}; batch 1024 |
+
+*H4 (as registered: deep models do **not** beat GBMs), operationalised now.*
+The best-validation deep model vs the C1-R best-validation GBM (XGBoost, its
+cached 10-seed test scores), PR-AUC by the C1 paired bootstrap. **H4 is
+supported if the 95% CI of PR-AUC(deep) − PR-AUC(GBM) is not entirely above
+0.** Because that is an absence-of-superiority claim, we also report whether
+the CI is entirely below 0 (the GBM is significantly better). All three deep
+models vs XGBoost are reported as secondary; P@100 as secondary.
+
+### C4 — feature ablation and class imbalance (exploratory, no hypothesis)
+
+*L1 feature groups:* CVSS = {score, severity, version}; text = 64 SVD
+components; EPSS-PIT = {score, percentile}. Seven sets: each alone, each pair,
+all. Models: the C1-R-selected XGBoost and LR configurations, **not re-tuned
+per subset** (stated limitation). Every set vs "all" by paired bootstrap.
+
+*L1 imbalance (XGBoost, all features):* none; `scale_pos_weight` =
+√(neg/pos); = neg/pos; random negative undersampling to 1:20 (new sample
+per seed). LR with `class_weight="balanced"` vs unweighted. Reported:
+PR-AUC, P@100, Brier, ECE, each vs "none" by paired bootstrap.
+
+*"Context-only" needs asset context, which only L3 has.* L3 exploratory
+ablation, **simulated, reported separately, never as ground truth**: target
+`priority_label` ∈ {High, Critical} (5.6%); finding features = {source
+layer, tool, base severity, EPSS score/percentile, CVSS, in_kev,
+public_exploit}; context features = {criticality tier, internet-facing,
+PCI/DORA/regulatory scope, environment, asset type, business unit,
+provider, principal counts, blast radius, admin path, SLA breached,
+recurrence, age}; finding-only vs context-only vs all. XGBoost library
+defaults (no L3 tuning), 10 grouped-by-asset 80/20 splits (split seed =
+model seed). Formula outputs (`real_component`, `context_component`,
+`priority_score`, `priority_label_clean`) and SLA/due-date fields are
+excluded. Secondary: the same against `priority_label_clean` (no label
+noise). This measures how the documented formula distributes signal; it is
+not evidence about a real estate.
+
+### C5 — calibration (descriptive, every final model)
+
+Models: C1-R (6), C2 (6), C3 (3), C4 imbalance variants (4). Raw Brier and
+ECE (locked: 10 equal-width bins) for probabilistic models. Because almost
+all mass sits in the first equal-width bin at a 0.14% base rate, an
+**adaptive ECE (15 equal-mass bins)** is added and labelled as such.
+Recalibration: Platt (logistic regression on logit(p), or on the raw score for
+ranking objectives) and isotonic, **fitted on v2-fold validation predictions
+of the same configuration trained on the v2 fold (seed 0)**, then applied to
+every test seed. Reliability diagrams (equal-mass bins, log axes). Platt vs
+raw Brier difference by paired bootstrap per model. Stated caveat: the
+calibrator is learned on a model trained on less data than the test model.
+
+### C6 — statistical comparison across Study C
+
+All final models (C1-R 6, C2 6, C3 3) plus the B2 baselines CVSS v3 and
+point-in-time EPSS. (1) Global test metrics, 10 seeds, mean ± std.
+(2) Monthly MAP (primary — the monthly form of PR-AUC), P@10, NDCG@10,
+NDCG@100, MRR over 46 months; Friedman + Nemenyi; **critical-difference
+diagrams** (α = 0.05). (3) Wilcoxon of every model vs the best mean-rank
+model and vs point-in-time EPSS, Holm-adjusted per metric. Stated caveat:
+with 17 methods and 46 blocks Nemenyi is conservative; Wilcoxon-Holm is the
+more powerful, reported alongside, never instead.
