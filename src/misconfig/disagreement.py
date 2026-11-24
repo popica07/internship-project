@@ -276,6 +276,21 @@ def run() -> dict:
     plot_kappa_sweep(sweep, OUTPUT_DIR / "a3_kappa_sweep.png")
     plot_crosstab(crosstab, OUTPUT_DIR / "a3_severity_crosstab.png")
 
+    from src.tracking import log_experiment
+
+    log_experiment(
+        "A3",
+        params={"tool_a": TOOL_A, "tool_b": TOOL_B, "primary_threshold": PRIMARY_THRESHOLD},
+        metrics={
+            "kappa": primary["kappa"],
+            "kappa_ci_low": primary["ci_low"],
+            "kappa_ci_high": primary["ci_high"],
+            "n_rated_pairs": primary["n"],
+            "n_disagreements": len(disagreements),
+        },
+        artifacts=sorted(OUTPUT_DIR.glob("a3_*")),
+    )
+
     return {
         "availability": availability,
         "sweep": sweep,

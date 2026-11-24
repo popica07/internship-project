@@ -10,6 +10,7 @@ import logging
 import os
 import signal
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 RESULTS_PER_PAGE = 2000
 RAW_CACHE_DIR = Path("data/raw/nvd")
+UPDATES_CACHE_DIR = Path("data/raw/nvd_updates")
+# NVD rejects lastModStartDate/lastModEndDate ranges longer than 120 days.
+MAX_LASTMOD_WINDOW = timedelta(days=120)
 MAX_RETRIES = 6
 RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
 HARD_DEADLINE_SECONDS = 120
@@ -48,11 +52,20 @@ def _sleep_interval(api_key: str | None) -> float:
 
 
 def _fetch_page(start_index: int, api_key: str | None) -> dict:
+    return _fetch_page_params(start_index, RESULTS_PER_PAGE, api_key)
+
+
+def _fetch_page_params(
+    start_index: int,
+    results_per_page: int,
+    api_key: str | None,
+    extra_params: dict | None = None,
+) -> dict:
     # A fresh connection per request (no persistent Session) avoids a stale
     # keep-alive connection from silently hanging past the configured
     # timeout after many requests over a long-running pull.
     headers = {"apiKey": api_key} if api_key else {}
-    params = {"resultsPerPage": RESULTS_PER_PAGE, "startIndex": start_index}
+    params = {"resultsPerPage": results_per_page, "startIndex": start_index, **(extra_params or {})}
 
     for attempt in range(1, MAX_RETRIES + 1):
         previous_handler = signal.signal(signal.SIGALRM, _alarm_handler)
@@ -146,34 +159,57 @@ def _parse_cve_item(item: dict) -> dict:
     }
 
 
+def fetch_total_results(api_key: str | None = None) -> int:
+    """Live catalog size, deliberately NOT read from the page cache.
+
+    Taking `totalResults` from cached page 0 pins the dataset to whatever size
+    it had when that page was first written, so the pull can never grow and a
+    "refresh" silently returns the old catalog. (This happened: a refresh in
+    November still returned the September total of 387,494 against a live
+    430,678.) One cheap request keeps the cache useful for resuming while
+    letting the catalog grow.
+    """
+    payload = _fetch_page_params(0, 1, api_key)
+    return int(payload["totalResults"])
+
+
 def fetch_all_cves(api_key: str | None = None) -> list[dict]:
     """Paginate NVD API 2.0 for the full CVE catalog, caching raw pages to disk.
 
     A rerun after an interruption resumes from cached pages instead of
-    re-fetching everything.
+    re-fetching everything, and picks up CVEs added since the cache was built.
     """
     api_key = api_key or os.environ.get("NVD_API_KEY") or None
     RAW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     records: list[dict] = []
+    cached_mtimes: list[float] = []
     start_index = 0
-    total_results = None
-    pbar = None
+    total_results = fetch_total_results(api_key)
+    logger.info("NVD catalog currently holds %d CVEs", total_results)
+    pbar = tqdm(total=total_results, desc="NVD CVEs", unit="cve")
 
     try:
-        while total_results is None or start_index < total_results:
+        while start_index < total_results:
             cache_path = RAW_CACHE_DIR / f"page_{start_index}.json"
 
+            payload = None
             if cache_path.exists():
                 payload = json.loads(cache_path.read_text())
-            else:
+                # A page cached when it was the catalog's LAST page is short.
+                # Once the catalog has grown past it, reusing it would silently
+                # drop every CVE that has since filled the rest of that page
+                # (this would have lost 506 CVEs at page_386000 in November).
+                is_last_page = start_index + RESULTS_PER_PAGE >= total_results
+                if len(payload.get("vulnerabilities", [])) < RESULTS_PER_PAGE and not is_last_page:
+                    logger.info("Cached page %d is short; re-fetching", start_index)
+                    payload = None
+                else:
+                    cached_mtimes.append(cache_path.stat().st_mtime)
+            if payload is None:
                 payload = _fetch_page(start_index, api_key)
                 cache_path.write_text(json.dumps(payload))
                 time.sleep(_sleep_interval(api_key))
-
-            if total_results is None:
-                total_results = payload["totalResults"]
-                pbar = tqdm(total=total_results, desc="NVD CVEs", unit="cve")
 
             vulnerabilities = payload.get("vulnerabilities", [])
             for item in vulnerabilities:
@@ -185,5 +221,98 @@ def fetch_all_cves(api_key: str | None = None) -> list[dict]:
         if pbar is not None:
             pbar.close()
 
+    # Cached pages hold CVE content as it was when each page was written. NVD
+    # keeps editing old records (late CVSS scoring, rejections, new reference
+    # tags), so overlay everything modified since the oldest cached page.
+    if cached_mtimes:
+        since = datetime.fromtimestamp(min(cached_mtimes), tz=timezone.utc) - timedelta(days=1)
+        updates = fetch_modified_since(since, api_key=api_key)
+        if updates:
+            by_id = {record["cve_id"]: i for i, record in enumerate(records)}
+            replaced = added = 0
+            for record in updates:
+                index = by_id.get(record["cve_id"])
+                if index is None:
+                    by_id[record["cve_id"]] = len(records)
+                    records.append(record)
+                    added += 1
+                else:
+                    records[index] = record
+                    replaced += 1
+            logger.info(
+                "Applied NVD updates since %s: %d records refreshed, %d added",
+                since.date(), replaced, added,
+            )
+
+    ids = [record["cve_id"] for record in records]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"NVD pull produced {len(ids) - len(set(ids))} duplicate CVE ids")
+
     logger.info("Fetched %d CVE records from NVD API 2.0", len(records))
     return records
+
+
+def _nvd_timestamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+
+
+def fetch_modified_since(
+    since: datetime, until: datetime | None = None, api_key: str | None = None
+) -> list[dict]:
+    """Every CVE NVD modified in [since, until], chunked into <=120-day windows.
+
+    Pages are cached under data/raw/nvd_updates/<window>/ so the overlay is
+    reproducible and resumable like the main pull.
+    """
+    api_key = api_key or os.environ.get("NVD_API_KEY") or None
+    until = until or datetime.now(timezone.utc)
+    records: list[dict] = []
+
+    window_start = since
+    while window_start < until:
+        window_end = min(window_start + MAX_LASTMOD_WINDOW, until)
+        # Reuse a window fetched earlier the same day instead of re-pulling it,
+        # so a same-day rerun of A1 is free and reproduces the same dataset.
+        same_day = sorted(
+            UPDATES_CACHE_DIR.glob(f"{window_start:%Y%m%dT%H%M%S}_{window_end:%Y%m%d}T*")
+        )
+        if same_day:
+            window_dir = same_day[-1]
+            window_end = datetime.strptime(
+                window_dir.name.split("_")[1], "%Y%m%dT%H%M%S"
+            ).replace(tzinfo=timezone.utc)
+            if window_end < window_start + MAX_LASTMOD_WINDOW:
+                until = window_end  # the cached window was the final one: stop there
+        else:
+            window_dir = UPDATES_CACHE_DIR / (
+                f"{window_start:%Y%m%dT%H%M%S}_{window_end:%Y%m%dT%H%M%S}"
+            )
+        window_dir.mkdir(parents=True, exist_ok=True)
+        params = {
+            "lastModStartDate": _nvd_timestamp(window_start),
+            "lastModEndDate": _nvd_timestamp(window_end),
+        }
+
+        start_index, total = 0, None
+        while total is None or start_index < total:
+            cache_path = window_dir / f"page_{start_index}.json"
+            if cache_path.exists():
+                payload = json.loads(cache_path.read_text())
+            else:
+                payload = _fetch_page_params(start_index, RESULTS_PER_PAGE, api_key, params)
+                cache_path.write_text(json.dumps(payload))
+                time.sleep(_sleep_interval(api_key))
+            total = int(payload["totalResults"])
+            records.extend(_parse_cve_item(item) for item in payload.get("vulnerabilities", []))
+            start_index += RESULTS_PER_PAGE
+
+        logger.info(
+            "NVD modified %s .. %s: %d CVEs", window_start.date(), window_end.date(), total
+        )
+        window_start = window_end
+
+    # A CVE edited in two windows appears twice; keep the latest version.
+    latest: dict[str, dict] = {}
+    for record in records:
+        latest[record["cve_id"]] = record
+    return list(latest.values())

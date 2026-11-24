@@ -12,6 +12,7 @@ not a bug in this module.
 import gzip
 import io
 import logging
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -24,11 +25,19 @@ EPSS_URL = "https://epss.cyentia.com/epss_scores-current.csv.gz"
 EPSS_ASOF_URL = "https://epss.empiricalsecurity.com/epss_scores-{date}.csv.gz"
 
 
-def fetch_epss_scores() -> pd.DataFrame:
-    response = requests.get(EPSS_URL, timeout=60)
-    response.raise_for_status()
+def fetch_epss_scores(cache_dir: Path = Path("data/raw/epss")) -> pd.DataFrame:
+    """Today's EPSS snapshot, kept as a dated raw copy (same reason as KEV)."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"epss_scores-current-downloaded-{date.today():%Y-%m-%d}.csv.gz"
+    if cache_path.exists():
+        content = cache_path.read_bytes()
+    else:
+        response = requests.get(EPSS_URL, timeout=60)
+        response.raise_for_status()
+        content = response.content
+        cache_path.write_bytes(content)
 
-    with gzip.GzipFile(fileobj=io.BytesIO(response.content)) as gz:
+    with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz:
         # First line is a metadata comment (#model_version:...,score_date:...)
         # before the real "cve,epss,percentile" header.
         df = pd.read_csv(gz, comment="#")

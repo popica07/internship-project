@@ -302,6 +302,21 @@ def run() -> dict:
     plot_family_sizes(families, OUTPUT_DIR / "a4_family_sizes.png")
     plot_sweep(sweep, OUTPUT_DIR / "a4_min_cluster_size_sweep.png")
 
+    from src.tracking import log_experiment
+
+    primary = sweep.set_index("min_cluster_size").loc[PRIMARY_MIN_CLUSTER_SIZE]
+    log_experiment(
+        "A4",
+        params={"min_cluster_size": PRIMARY_MIN_CLUSTER_SIZE, "seeds": list(SEEDS)},
+        metrics={
+            "n_families": int((families["family"] >= 0).sum()),
+            "silhouette": primary["silhouette"],
+            "noise_pct": primary["noise_pct"],
+            **{f"stability_{k}": v for k, v in stability.items()},
+        },
+        artifacts=sorted(OUTPUT_DIR.glob("a4_*")),
+    )
+
     return {
         "df": df,
         "labels": labels,

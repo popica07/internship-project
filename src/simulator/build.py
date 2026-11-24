@@ -70,6 +70,29 @@ def build(config: SimulatorConfig = DEFAULT_CONFIG) -> dict:
     assets.to_csv(ASSETS_PATH, index=False)
     pd.DataFrame(as_records(config)).to_csv(PARAMETERS_PATH, index=False)
 
+    from sklearn.metrics import adjusted_mutual_info_score
+
+    from src.tracking import log_experiment
+
+    label_share = findings["priority_label"].value_counts(normalize=True)
+    vulns = findings[findings["source_layer"] == "L1"]
+    log_experiment(
+        "A5",
+        params={record["parameter"]: record["value"] for record in as_records(config)},
+        metrics={
+            "n_assets": len(assets),
+            "n_findings": len(findings),
+            "n_vuln_findings": len(vulns),
+            "n_vuln_findings_kev": int(vulns["in_kev"].sum()),
+            **{f"label_share_{k.lower()}": v for k, v in label_share.items()},
+            "vuln_label_share_low": (vulns["priority_label"] == "Low").mean(),
+            "ami_source_layer_vs_label": adjusted_mutual_info_score(
+                findings["source_layer"], findings["priority_label"]
+            ),
+        },
+        artifacts=[PARAMETERS_PATH],
+    )
+
     return {"findings": findings, "assets": assets, "principals": principals, "config": config}
 
 

@@ -81,8 +81,10 @@ and any field derived from it; anything computed after the split date.
    feature rather than back-filled.
 2. **The L3 label is partly our own function.** A model recovering it is not
    evidence the approach works on real bank data.
-3. **L1/L2 scale mismatch in the L3 label** (A5) — until resolved, L3 results
-   speak only to misconfiguration prioritisation.
+3. **L1/L2 scale mismatch in the L3 label** (A5) — resolved 2026-09-09 by the
+   label amendment (evaluation protocol §7), but the residual `source_layer`
+   signal (AMI ≈ 0.09) is not zero; L3 results must report it alongside any
+   feature-ablation finding.
 4. **No real enterprise data exists in this project.** No L3 result may be
    presented as a measurement of Deutsche Bank's estate.
 5. **KEV is a lagging, partial ground truth** — it records exploitation that was

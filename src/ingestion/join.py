@@ -13,6 +13,7 @@ from tqdm import tqdm
 from src.ingestion.epss import fetch_epss_scores
 from src.ingestion.kev import fetch_kev
 from src.ingestion.nvd import fetch_all_cves
+from src.tracking import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -61,7 +62,39 @@ def build_l1_dataset() -> pd.DataFrame:
     stages.update(1)
     stages.close()
 
+    _log_run(df)
     return df
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _log_run(df: pd.DataFrame) -> None:
+    kev = int(df["in_kev"].sum())
+    log_experiment(
+        "A1",
+        params={
+            "output": str(OUTPUT_PATH),
+            "output_sha256": _file_sha256(OUTPUT_PATH),
+            "date_min": df["published_date"].min().date(),
+            "date_max": df["published_date"].max().date(),
+        },
+        metrics={
+            "n_cves": len(df),
+            "n_kev": kev,
+            "kev_rate": kev / len(df),
+            "imbalance_ratio": (len(df) - kev) / kev if kev else float("nan"),
+            "epss_coverage": df["epss_score"].notna().mean(),
+            "cvss_coverage": df["cvss_score"].notna().mean(),
+        },
+    )
 
 
 def log_stats(df: pd.DataFrame) -> None:

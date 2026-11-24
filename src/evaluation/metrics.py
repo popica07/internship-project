@@ -5,8 +5,8 @@ Ranking:     NDCG@k, MAP, MRR, Recall@k
 Calibration: Brier score, Expected Calibration Error
 Secondary:   ROC-AUC - reported, never used to choose a model
 
-ROC-AUC is deliberately demoted. At the L1 base rate (1,695 KEV of 387,494
-CVEs, ~1:228) a model can look strong on ROC-AUC while being useless at the top
+ROC-AUC is deliberately demoted. At the L1 base rate (1,790 KEV of 430,678
+CVEs, ~1:240) a model can look strong on ROC-AUC while being useless at the top
 of the ranking, which is the only part a security engineer ever reads.
 
 Everything here takes (y_true, y_score) and returns plain floats, so Study B/C

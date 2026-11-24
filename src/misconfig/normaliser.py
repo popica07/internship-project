@@ -141,6 +141,17 @@ def build_l2_catalog() -> pd.DataFrame:
     stages.update(1)
     stages.close()
 
+    from src.tracking import log_experiment
+
+    log_experiment(
+        "A2",
+        params={f"{tool}_commit": commit for tool, commit in commits.items()},
+        metrics={
+            "n_checks": len(df),
+            **{f"n_checks_{tool}": int(n) for tool, n in df["tool"].value_counts().items()},
+            "severity_coverage": df["severity_normalised"].notna().mean(),
+        },
+    )
     return df
 
 

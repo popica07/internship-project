@@ -1,6 +1,9 @@
 # Evaluation Protocol — LOCKED
 
 **Experiment:** A6 · **Locked:** 2026-09-09 · **Status:** binding for Studies B, C, D
+**Amended:** 2026-11-23 — L1 refreshed to the November catalog before any Study B
+model existed. Rules unchanged; only the dataset counts below moved. See the
+CLAUDE.md Deviations Log ("A1 — November refresh").
 
 This protocol is fixed before any model is trained (CLAUDE.md rule 11). Any
 deviation must be recorded in the Deviations Log in `CLAUDE.md` with its
@@ -21,8 +24,8 @@ scored identically.
 | Calibration | Brier score, ECE (10 bins), reliability diagram | Every probabilistic model |
 | Secondary | ROC-AUC | **Reported, never used to select** |
 
-**Why ROC-AUC is demoted.** At the L1 base rate (1,695 KEV in 387,494 CVEs,
-≈1:228) it is actively misleading. Measured on a synthetic imbalanced problem,
+**Why ROC-AUC is demoted.** At the L1 base rate (1,790 KEV in 430,678 CVEs,
+≈1:240) it is actively misleading. Measured on a synthetic imbalanced problem,
 a *random* ranker scores ROC-AUC 0.556 while its PR-AUC is 0.006 and its
 Precision@10 is 0.00. A model may not be called good on ROC-AUC.
 
@@ -35,7 +38,7 @@ silently broken split.
 
 **L1 / L2 — temporal, always.** Train on CVEs published strictly before date
 `T`, test on `T` onwards. Never shuffle. Default `T = 2023-01-01`
-(train 203,652 / test 183,842). `assert_no_temporal_leakage()` must be called
+(train 203,652 / test 227,026; KEV 1,038 / 752). `assert_no_temporal_leakage()` must be called
 after every split.
 
 **L3 — grouped by asset.** No `asset_id` may appear in both train and test;
@@ -57,19 +60,20 @@ Evidence (A6). Among CVEs published before 2023-01-01 — i.e. rows that would b
 
 | Group | n | median present-day EPSS |
 |---|---|---|
-| Never in KEV | 202,618 | 0.0141 |
-| KEV added **before** 2023-01-01 | 864 | 0.6180 |
-| KEV added **after** 2023-01-01 | 170 | **0.6427** |
+| Never in KEV | 202,614 | 0.0142 |
+| KEV added **before** 2023-01-01 | 864 | 0.6178 |
+| KEV added **after** 2023-01-01 | 174 | **0.7028** |
 
 CVEs whose exploitation became known only *after* the split point already carry
-a median EPSS 45.7× the never-exploited baseline, and indistinguishable from
+a median EPSS 49.5× the never-exploited baseline, and indistinguishable from
 those exploited before it. Today's EPSS is close to an oracle for future KEV
 membership.
 
 **Required fix:** use point-in-time EPSS via
 `src.ingestion.epss.fetch_epss_asof(split_date)`. Daily archives are available
 back to at least 2021. Re-running the same test with EPSS as of 2023-01-01
-drops the ratio from 45.7× to **5.0×** — the residual is legitimate predictive
+drops the ratio from 49.5× to **5.7×**
+(Sep 9 data: 45.7× → 5.0×; same conclusion) — the residual is legitimate predictive
 signal, which is what EPSS is designed to provide.
 
 EPSS-current remains permitted for: descriptive statistics, and as a **baseline
@@ -123,10 +127,11 @@ Study C ablation. Three coupled changes were adopted together:
    operational class sizes.
 
 Result: shortcut AMI 0.289 → 0.095; vulnerabilities 99.4% `Low` → 80.6/15.6/
-3.3/0.4. Raw `epss_score` is unchanged in L1 experiments (B2/B3), where
+3.3/0.4. (Rebuilt on the November L1: AMI 0.098, vulnerabilities 81.5% `Low`,
+overall 54.1/40.3/5.2/0.4 — thresholds still reproduce the target class sizes.) Raw `epss_score` is unchanged in L1 experiments (B2/B3), where
 calibration rather than discrimination is what matters.
 
 **Binding for Study C:** `misconfig_scale` is swept in C7, and any sweep must
 either recalibrate the thresholds or report the resulting class-size shift —
-they are coupled. Residual AMI 0.095 is not zero and must not be reported as
+they are coupled. Residual AMI ≈0.1 is not zero and must not be reported as
 if layer carried no signal.

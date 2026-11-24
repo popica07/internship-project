@@ -57,7 +57,10 @@ def load_l1() -> pd.DataFrame:
                  "epss_score", "in_kev", "kev_date_added", "public_exploit", "has_patch"],
     )
     df["published_date"] = pd.to_datetime(df["published_date"], format="ISO8601", utc=True, errors="coerce")
-    df["kev_date_added"] = pd.to_datetime(df["kev_date_added"], utc=True, errors="coerce")
+    df["kev_date_added"] = pd.to_datetime(df["kev_date_added"], format="ISO8601", utc=True, errors="coerce")
+    # Rule from the A1 date-parsing incident: assert on nulls, never trust coerce.
+    if df["published_date"].isna().any() or df["kev_date_added"].isna().sum() != (df["in_kev"] == 0).sum():
+        raise ValueError("L1 dates failed to parse - see CLAUDE.md Deviations Log (A1)")
     return df
 
 
@@ -181,6 +184,25 @@ def run() -> dict:
         ]
     )
     summary.to_csv(OUTPUT_DIR / "a6_layer_summary.csv", index=False)
+
+    from src.tracking import log_experiment
+
+    by_group = leakage.set_index("group")
+    never = by_group.iloc[0]
+    late = by_group.iloc[-1]
+    log_experiment(
+        "A6",
+        params={"split_date": SPLIT_DATE},
+        metrics={
+            "l1_rows": len(l1),
+            "l1_kev": int(l1["in_kev"].sum()),
+            "l1_train_rows": int((l1["published_date"] < pd.Timestamp(SPLIT_DATE, tz="UTC")).sum()),
+            "l1_test_rows": int((l1["published_date"] >= pd.Timestamp(SPLIT_DATE, tz="UTC")).sum()),
+            "epss_leak_ratio_current": late["median_epss_current"] / never["median_epss_current"],
+            "epss_leak_ratio_asof": late["median_epss_asof_split"] / never["median_epss_asof_split"],
+        },
+        artifacts=sorted(OUTPUT_DIR.glob("a6_*")),
+    )
 
     return {"l1": l1, "l2": l2, "l3": l3, "leakage": leakage, "summary": summary}
 

@@ -286,9 +286,13 @@ SCOUTSUITE_REPO = "https://github.com/nccgroup/ScoutSuite"
 ```
 
 **NVD API 2.0 notes:** paginate `resultsPerPage=2000` via `startIndex`; without
-an API key the limit is ~5 req/30s and a full pull (~387k CVEs, ~194 pages)
+an API key the limit is ~5 req/30s and a full pull (~431k CVEs, ~216 pages)
 takes 1.5–2h. `src/ingestion/nvd.py` caches every page to `data/raw/nvd/` so an
-interrupted run resumes for free. Run long pulls under
+interrupted run resumes for free; a refresh re-fetches only short (formerly
+last) pages and the new tail, then overlays every CVE NVD modified since the
+cache was built (`lastModStartDate`, cached in `data/raw/nvd_updates/`). KEV and
+EPSS-current are saved as dated raw copies in `data/raw/kev/` and
+`data/raw/epss/` — they are the label provenance. Run long pulls under
 `caffeinate -s -d -i -m` (see Deviations Log).
 
 ---
@@ -543,6 +547,41 @@ housekeeping.
   `src/evaluation/eda.py`. `metrics.py` and `statistical.py` were already
   planned.
 
+### A1 — November refresh (2026-11-23, before any Study B model)
+
+- **Decision: Study B runs on the November catalog**, not the Sep 9 lock.
+  430,678 CVEs (was 387,494), 1,790 KEV (was 1,697), imbalance 1:239.6. The
+  pre-2023 training partition is unchanged at 203,652 rows; only the test side
+  grew (183,842 → 227,026; KEV 1,038 train / 752 test). The Sep 9 L1 and L3 are
+  kept in `data/snapshots/` (gitignored) as the record of what was locked.
+- **The refresh had silently not refreshed.** `nvd.py` took `totalResults` from
+  cached page 0, so a November run returned the September total. Fixed with a
+  live count — and that exposed a second bug: the cached *last* page from
+  September held 1,494 CVEs, and reusing it would have dropped the 506 CVEs that
+  have since filled it. Short non-final pages are now re-fetched.
+- **Cached pages go stale, not just incomplete.** 98,016 CVEs (23% of the
+  catalog) were modified by NVD between Sep 7 and Nov 23 — late CVSS scoring,
+  new reference tags, rejections. Appending new pages alone would have mixed
+  vintages; the pull now overlays all records modified since the cache was
+  built. NVD paging is append-only (verified: 0 duplicate ids across vintages).
+  Caveat: paging a `lastMod` query while NVD edits records can shift results
+  (98,094 reported vs 98,016 unique), so a handful of records may keep their
+  older version.
+- **KEV and EPSS-current were never cached**, so a rebuild silently relabelled
+  CVEs (a same-day partial rebuild had already swapped Nov KEV/EPSS onto Sep
+  CVEs). The Sep 9 label set cannot be regenerated, only read from the snapshot.
+  Both fetchers now keep dated raw copies.
+- **Effect on A-results:** A2–A4 reproduce exactly (κ 0.179, 138 families, ARI
+  0.53). A5 on the new L1: AMI 0.098 (was 0.095), vulnerabilities 81.5% `Low`
+  (was 80.6%), overall 54.1/40.3/5.2/0.4 — thresholds still hold; 28 KEV
+  findings in the estate (was 29). A6 EPSS leakage 49.5× → 5.7× point-in-time
+  (was 45.7× → 5.0×) — same conclusion, protocol rule unchanged.
+- **Also fixed while auditing Study A:** no experiment had been logged to MLflow
+  (rule 6) — `src/tracking.py` now logs each A-step, store at
+  `experiments/mlflow.db`; notebooks had never been executed and wrote to
+  `notebooks/data/` when run from `notebooks/` (they now `chdir` to the root);
+  `data/snapshots/` was not gitignored (rule 10).
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -556,9 +595,10 @@ housekeeping.
 
 ## Current Status
 
-**Active study:** Study A — Data Foundation
-**STUDY A IS COMPLETE.** The evaluation protocol is locked and the analysis
-plan is pre-registered. Do not change either without recording the deviation.
+**STUDY A IS COMPLETE** (audited and re-run end to end 2026-11-23). The
+evaluation protocol is locked and the analysis plan is pre-registered; the
+protocol was amended once (November L1 refresh, counts only). Do not change
+either without recording the deviation.
 
 **Active study:** Study B — Exploitation Prediction & Baselines
 **Current experiment:** B1 — baseline battery
@@ -579,7 +619,8 @@ at the next meeting** — it is a documented, defensible amendment to a formula
 this file had declared fixed, not a silent change.
 
 **A6 result:** EPSS leakage quantified and fixed via point-in-time archives
-(45.7× → 5.0×). L1 imbalance 1:227 (1,697 KEV of 387,494).
+(49.5× → 5.7× on the November L1). L1 imbalance 1:240 (1,790 KEV of 430,678).
+MLflow: `mlflow ui --backend-store-uri sqlite:///experiments/mlflow.db`.
 
 **A3 result (carry into later studies):** Prowler vs ScoutSuite severity
 agreement is only *slight* — Cohen's κ = 0.179, 95% CI [0.015, 0.330] on 161
