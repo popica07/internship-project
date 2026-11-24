@@ -73,3 +73,37 @@ def interpret_kappa(kappa: float) -> str:
     if kappa < 0.80:
         return "substantial"
     return "almost perfect"
+
+
+def friedman_nemenyi(scores: "pd.DataFrame") -> dict:
+    """Friedman test across methods (columns) over blocks (rows), + Nemenyi.
+
+    Higher score = better. Returns the test statistic, p-value, mean ranks
+    (1 = best) and the Nemenyi pairwise p-value matrix. Blocks with any NaN
+    are dropped first, and the count is returned so it can be reported.
+    """
+    import pandas as pd
+    import scikit_posthocs as sp
+    from scipy.stats import friedmanchisquare
+
+    complete = scores.dropna()
+    statistic, p_value = friedmanchisquare(*[complete[c] for c in complete.columns])
+    ranks = complete.rank(axis=1, ascending=False).mean().sort_values()
+    nemenyi = sp.posthoc_nemenyi_friedman(complete.to_numpy())
+    nemenyi.index = nemenyi.columns = complete.columns
+    return {
+        "statistic": float(statistic), "p_value": float(p_value),
+        "mean_ranks": ranks, "nemenyi": pd.DataFrame(nemenyi),
+        "n_blocks": len(complete), "n_blocks_dropped": len(scores) - len(complete),
+    }
+
+
+def wilcoxon_pair(a, b) -> dict:
+    """Paired Wilcoxon signed-rank (two-sided) for one method pair."""
+    from scipy.stats import wilcoxon
+
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    mask = ~(np.isnan(a) | np.isnan(b))
+    result = wilcoxon(a[mask], b[mask], zero_method="zsplit")
+    return {"statistic": float(result.statistic), "p_value": float(result.pvalue),
+            "n": int(mask.sum()), "median_diff": float(np.median(a[mask] - b[mask]))}

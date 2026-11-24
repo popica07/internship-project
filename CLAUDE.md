@@ -616,6 +616,107 @@ housekeeping.
   test years, not model drift. Must be separated there.
 - **EPSS-current calibration:** Brier 0.0038, ECE 0.0075 (96.7% coverage).
 
+### B2 — KEV membership prediction (2026-11-24)
+
+- **Most test KEV CVEs are already in KEV when first triaged.** 443 of the 752
+  test KEV CVEs were in KEV by their first monthly EPSS snapshot (mean lag
+  ≈ 15 days). Excluded per the addendum, leaving **309 KEV of 226,463** (plus
+  120 CVEs published after the last snapshot). KEV is fast for the CVEs it
+  catches at all — the residual task is the *slow* ones, which is harder.
+- **The bar moves on the B2 set.** CVSS v3 falls from PR-AUC 0.0148 (B1, full
+  test) to **0.0068 ± 0.0014** once the already-known CVEs are removed: the
+  easy, fast-listed CVEs were the ones CVSS ranked well. Every comparison
+  below is on the B2 set.
+- **Code fixes before the first run:** `features.temporal_task` had been
+  re-implementing the split and labels; it now calls `temporal_split` and
+  `temporal_labels` (rule 2 / pre-registered rule). The H1 bootstrap covered
+  PR-AUC only; it now covers PR-AUC *and* P@100, as H1 is stated. Counts match
+  the pre-registration (864 train positives as of T; 1,038 today).
+
+  | scorer | PR-AUC | P@100 | ROC-AUC |
+  |---|---|---|---|
+  | epss_current *(leaky reference)* | 0.351 | 0.64 | 0.985 |
+  | logreg (reference, deterministic) | **0.0235** | 0.13 | 0.825 |
+  | epss_pit (point-in-time EPSS) | 0.0175 | 0.11 | 0.596 |
+  | gbm + reference tags *(sensitivity)* | 0.0174 ± 0.0027 | 0.109 ± 0.017 | 0.799 |
+  | **gbm (primary)** | **0.0143 ± 0.0016** | **0.089 ± 0.022** | 0.812 |
+  | gbm, labels today *(sensitivity)* | 0.0131 ± 0.0019 | 0.086 ± 0.019 | 0.811 |
+  | cvss_v3 | 0.0068 ± 0.0014 | 0.017 ± 0.012 | 0.781 |
+  | random | 0.0016 ± 0.0005 | 0.002 ± 0.004 | 0.506 |
+
+- **H1 SUPPORTED vs CVSS v3:** seed-averaged GBM − CVSS v3, paired bootstrap
+  over test CVEs (500): PR-AUC +0.0095 [0.0033, 0.0227], P@100 +0.08
+  [0.02, 0.15]; the GBM beats CVSS on both metrics in 10/10 seeds.
+- **But the learned model does NOT beat point-in-time EPSS:** GBM − epss_pit
+  PR-AUC −0.0017 [−0.0116, 0.0043], P@100 −0.01 [−0.06, 0.03]. Honest framing:
+  ML on public NVD fields beats CVSS, but EPSS (itself an ML model on richer,
+  private exploit-activity data) already captures that gain.
+- **Logistic regression beats the GBM** (0.0235 vs 0.0143). Not tuned away —
+  hyperparameters were fixed in advance. Probable cause: 864 positives and
+  noisy labels (174 late-listed CVEs are training negatives) favour a
+  low-variance model. Direct input to H2 in C1.
+- **Label sensitivity:** training on today's KEV is *not* better (0.0131), so
+  the as-of-T rule costs nothing. Reference-tag features help a little (0.0174)
+  but are leaky by construction (addendum) — sensitivity only.
+- `src/tracking.py` warns that Brier/ECE are NaN for rank baselines — expected
+  (no probabilities), not an error.
+- **Files added beyond the planned list:** `src/features.py` (shared
+  point-in-time feature/scoring-date logic for B2–B6) and one runner per
+  experiment, `src/models/b2_kev.py` … `b6_cost.py`. `statistical.py` gained
+  `friedman_nemenyi` / `wilcoxon_pair`; `epss.py` tolerates 2021 EPSS v1 files,
+  which have no percentile column.
+
+### B3 — EPSS regression (2026-11-24)
+
+- Target logit(EPSS as of 2023-01-01); 11,669 training CVEs had no EPSS on T
+  and were dropped (191,983 kept).
+- **Public NVD fields reproduce EPSS only weakly:** Spearman ρ vs today's EPSS
+  **0.358 ± 0.007** on test. As a KEV ranker: PR-AUC 0.0066 ± 0.0010, P@100
+  0.025 — no better than CVSS v3. EPSS's signal is mostly not in CVSS + text.
+
+### B4 — monthly ranking (2026-11-24)
+
+- **Batch definition (not fixed by the addendum, decided before running):** a
+  monthly batch = CVEs sharing one scoring date. 46 months used, 1 excluded
+  (no KEV). Per-month metrics are computed per seed, then seed-averaged.
+  `epss_current` is in the table but not in the Friedman test (leaky).
+- Friedman across 6 fair scorers significant on every metric (P@10 p=3e-4,
+  NDCG@10 p=2e-4, MAP p=2e-14, MRR p=7e-8). Mean ranks (MAP): logreg 2.30,
+  gbm 2.83, epss_pit 3.33, b3 3.50, cvss_v3 3.63, random 5.41.
+- **GBM vs CVSS v3:** Wilcoxon significant (p 0.003–0.013) but Nemenyi not
+  (p ≥ 0.31). Nemenyi over 6 scorers and 46 blocks is conservative — report
+  both, do not claim a Nemenyi-level difference.
+
+### B5 — temporal drift (2026-11-24)
+
+- 9 (N, test year) cells; positives per year 112–167 under the 365-day label.
+- **H5 — direction consistent, not significant.** GBM margin over CVSS v3 by
+  gap: 0.034 → 0.022 → 0.016 (gaps 1/2/3); it falls within every N that has
+  more than one gap (3/3). Spearman(gap, margin) ρ = −0.53, p = 0.14 over 9
+  cells. Report as "consistent decay, underpowered", not as confirmed.
+- **Test design choice (not fixed by the addendum, decided before running):**
+  margin over CVSS v3 in the same test year and lift (PR-AUC / base rate) are
+  the decay measures, because base rates differ by year; raw PR-AUC would
+  partly measure base rate.
+
+### B6 — cost-sensitive evaluation (2026-11-24)
+
+- **Calibration is good:** Brier 0.00137, ECE 0.00035; mean predicted
+  probability 0.0011 vs base rate 0.0014 (slight under-prediction).
+- **Validation year is thin:** 2022 has only 39 KEV as of 2023-01-01, so the
+  pre-registered validated threshold is unstable across seeds (at ratio 500:
+  cost 612 ± 61, remediated 128k ± 19k). The Bayes threshold 1/(1+r) of the
+  calibrated model is far more stable. Added as a *labelled reference* policy
+  before running; the validated threshold stays the primary.
+- Budget k ∈ {10, 50, 100} per month (protocol k values) — chosen before
+  running, the addendum did not fix k.
+- Cheapest policy per ratio (cost per 1,000 CVEs, unit C_FP): r=10 remediate-
+  none 13.6 (GBM threshold 13.7, equal); r=50 GBM top-10/month 64.9; r=100
+  GBM top-50/month 122.9; r=500 GBM Bayes threshold 468.9 (CVSS ≥ 9: 482.4;
+  validated threshold 611.6). **At equal monthly effort the GBM catches about
+  twice the KEV of CVSS ordering** (top-10: 24.2 vs 11.2; top-50: 53.7 vs
+  33.3), so it wins every budget comparison at every ratio.
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -634,13 +735,17 @@ evaluation protocol is locked and the analysis plan is pre-registered; the
 protocol was amended once (November L1 refresh, counts only). Do not change
 either without recording the deviation.
 
-**Active study:** Study B — Exploitation Prediction & Baselines
-**Done:** B1 — baseline battery (bar to beat: CVSS v3, PR-AUC 0.0148, P@100 0.037)
-**Current experiment:** B2 — KEV membership prediction
-**Current task:** feature table (pre-registered features only, point-in-time EPSS),
-labels via `temporal_labels` (primary + sensitivity), 10 seeds
+**STUDY B IS COMPLETE** (B1–B6 run 2026-11-24; results and every design choice
+not fixed by the addendum are in the Deviations Log, B2–B6 entries).
+**Headline:** H1 supported vs CVSS v3 (PR-AUC +0.0095 [0.0033, 0.0227], P@100
++0.08 [0.02, 0.15]) — but no learned model beats point-in-time EPSS, and
+logistic regression beats the GBM. H5: consistent decay, not significant
+(ρ = −0.53, p = 0.14, 9 cells). B6: GBM wins every monthly-budget policy.
+**Next study:** Study C — model comparison (C1 first; H2 now has a live
+counter-example: logreg > GBM in B2). Reuse `src/features.py` and the B2
+evaluation set so C results are comparable with B.
 
-**Read before writing any B1 code:**
+**Read before writing any Study B/C code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
 - `reports/analysis_plan_preregistration.md` — hypotheses fixed in advance,
   plus the KEV label-timing rule (registered 2026-11-24): train labels are KEV
@@ -685,6 +790,11 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] A5: estate simulator
 - [x] A6: EDA + evaluation protocol locked
 - [x] B1: baseline battery
+- [x] B2: KEV prediction (H1 vs CVSS supported; not vs EPSS-PIT)
+- [x] B3: EPSS regression (ρ 0.36)
+- [x] B4: monthly ranking (Friedman + Nemenyi + Wilcoxon)
+- [x] B5: temporal drift (H5 direction consistent, p = 0.14)
+- [x] B6: cost-sensitive evaluation
 
 **Update this checklist as experiments complete.**
 

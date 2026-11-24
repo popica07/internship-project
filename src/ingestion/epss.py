@@ -70,6 +70,9 @@ def fetch_epss_asof(date: str, cache_dir: Path = Path("data/raw/epss")) -> pd.Da
         df = pd.read_csv(gz, comment="#")
 
     df = df.rename(columns={"cve": "cve_id", "epss": "epss_score", "percentile": "epss_percentile"})
+    if "epss_percentile" not in df.columns:
+        # EPSS v1 files (2021) shipped scores only, no percentile column.
+        df["epss_percentile"] = float("nan")
     df["epss_asof_date"] = date
     logger.info("Fetched EPSS as of %s for %d CVEs", date, len(df))
     return df[["cve_id", "epss_score", "epss_percentile", "epss_asof_date"]]
