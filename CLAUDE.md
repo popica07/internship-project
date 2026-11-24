@@ -782,6 +782,35 @@ housekeeping.
 - The C1 notebook reads the saved outputs. A full re-run takes ~2 h
   (`python -m src.models.classical`).
 
+### C1-R — classical suite under selection protocol v2 (2026-11-24, post-hoc for C1)
+
+- **Protocol v2 pre-registered before this run** (commit e21fe21): train on
+  CVEs published < 2021-05-01, validate on 2021-05-01 … 2022-12-31, labels KEV
+  as of 2023-01-01 — 652 train / 145 validation positives (vs 39 in C1). Same
+  126 configs as C1, re-scored; selected configs refitted with 10 seeds and
+  tested once. C1's primary verdict stands; C1-R is reported beside it.
+- Run took ~5 h on 5 threads (paused once for heat with SIGSTOP/SIGCONT, no
+  effect on results).
+- **Test PR-AUC (tuned, 10 seeds):** LR 0.0235, XGBoost 0.0220 ± 0.0002,
+  LightGBM 0.0168 ± 0.0012, CatBoost 0.0146 ± 0.0025, RF 0.0132, DT 0.0116.
+  Best-validation model overall: LR (val 0.0827); best GBM: XGBoost (0.0812).
+- **H2 still NOT supported:** XGBoost − LR −0.0013 [−0.0070, 0.0031];
+  XGBoost − DT +0.0095 [0.0016, 0.0209] (one half only).
+- **H1b NOT supported as registered, but partial:** LR − EPSS-PIT PR-AUC
+  +0.0060 [0.0013, 0.0121] (p = 0.008), P@100 +0.01 [−0.03, 0.05]. H1b needs
+  both. First time any model beats point-in-time EPSS on a primary metric —
+  post-hoc for C1, so report as such.
+- **Selection reliability (diagnostic, all 126 configs fitted once on full
+  train, seed 0, tested — never used for selection):** Spearman val vs test,
+  v1 → v2 fold: pooled 0.68 → 0.78; LightGBM 0.16 → 0.68; XGBoost 0.40 →
+  0.77; CatBoost 0.74 → 0.57; RF 0.82 → 0.65; DT 0.52 → 0.58; LR −0.28 → 0.22
+  (LR configs barely differ on test, uninformative). v2 removes C1's failure
+  mode (LightGBM picked, 5th on test) — supports v2 for C2–C6.
+- Friedman across families (46 months) significant on all metrics (MAP
+  p < 1e-4); mean MAP ranks LR 2.76, XGBoost 2.98, LightGBM 3.22.
+- Code `src/models/c1_revised.py`; notebook `C1R_selection_protocol_v2.ipynb`;
+  outputs `outputs/c1r_*`; MLflow runs `C1R_*` (tag protocol=v2).
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -811,9 +840,13 @@ logistic regression beats the GBM. H5: consistent decay, not significant
 **Done:** C1 — H2 and H1b NOT supported. The 2022 validation fold (39 KEV)
 could not select models: LightGBM was best on validation and worst of the
 three GBMs on test. See the Deviations Log (C1). Exploratory B5-M / B6-R done.
-**Next:** pre-register a more stable selection protocol (multi-fold or
-fixed-horizon validation) *before* C2, then C2 learning-to-rank. Reuse
-`src/features.py` and the B2 evaluation set.
+**Done:** C1-R under selection protocol v2 (145 validation KEV, pre-registered
+e21fe21): H2 still not supported; H1b partial (LR beats EPSS-PIT on PR-AUC
++0.0060 [0.0013, 0.0121], not on P@100); v2 fold ranks configs far more like
+test (pooled ρ 0.68 → 0.78). See Deviations Log (C1-R).
+**Next:** C2 learning-to-rank, with model/hyperparameter selection on the v2
+fold (binding). Reuse `src/features.py`, `src/models/c1_revised.py` fold
+constants and the B2 evaluation set.
 
 **Read before writing any Study B/C code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
@@ -867,6 +900,7 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] B6: cost-sensitive evaluation
 - [x] B5-M / B6-R: exploratory follow-ups
 - [x] C1: classical ML suite (H2, H1b not supported; selection unreliable)
+- [x] C1-R: protocol v2 re-run (H2 no; H1b partial; selection reliable)
 
 **Update this checklist as experiments complete.**
 

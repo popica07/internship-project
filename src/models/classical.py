@@ -21,6 +21,7 @@ Usage:  python -m src.models.classical              (full run)
 import argparse
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -56,7 +57,7 @@ GBM_FAMILIES = ["xgboost", "lightgbm", "catboost"]
 OUTPUT_DIR = Path("outputs")
 CACHE_DIR = Path("data/processed/cache")
 PREDICTIONS_PATH = CACHE_DIR / "c1_test_predictions.pkl"
-N_JOBS = 8
+N_JOBS = int(os.environ.get("C1_N_JOBS", 8))
 
 
 # ---------------------------------------------------------------- search spaces
@@ -164,13 +165,14 @@ def tune() -> pd.DataFrame:
 
 def selected_configs(tuning: pd.DataFrame) -> dict:
     """Best *searched* config per family (the default is reported, not selectable)."""
-    searched = tuning[tuning.config_id != "default"]
+    searched = tuning[tuning.config_id.astype(str) != "default"]
     best = searched.loc[searched.groupby("family")["val_pr_auc"].idxmax()]
     return {r.family: {"config": json.loads(r.config), "val_pr_auc": r.val_pr_auc} for r in best.itertuples()}
 
 
 # ---------------------------------------------------------------- main run
-def run(tuning: pd.DataFrame | None = None) -> dict:
+def run(tuning: pd.DataFrame | None = None, tag: str = "c1", variants: tuple = ("tuned", "default")) -> dict:
+    """`tag` names outputs/MLflow runs (c1 = registered C1; c1r = protocol v2 re-selection)."""
     from src.tracking import log_experiment
 
     tuning = tune() if tuning is None else tuning
@@ -183,7 +185,7 @@ def run(tuning: pd.DataFrame | None = None) -> dict:
     y = task["y_test"].to_numpy()
     rows, preds = [], {}
     for family in FAMILIES:
-        for variant, config in (("tuned", chosen[family]["config"]), ("default", None)):
+        for variant, config in [v for v in (("tuned", chosen[family]["config"]), ("default", None)) if v[0] in variants]:
             for seed in SEEDS:
                 logger.info("C1 %s %s seed %d", family, variant, seed)
                 p = predict(make_model(family, config, seed).fit(task["X_train"], task["y_train"]), task["X_test"])
@@ -191,13 +193,13 @@ def run(tuning: pd.DataFrame | None = None) -> dict:
                 rows.append({"family": family, "variant": variant, "seed": seed,
                              **evaluate(y, p, is_probability=True)})
     results = pd.DataFrame(rows)
-    results.to_csv(OUTPUT_DIR / "c1_results_by_seed.csv", index=False)
+    results.to_csv(OUTPUT_DIR / f"{tag}_results_by_seed.csv", index=False)
 
     metrics = ["pr_auc", "precision_at_10", "precision_at_100", "ndcg_at_100", "mrr", "roc_auc", "brier", "ece"]
     grouped = results.groupby(["family", "variant"])[metrics]
     summary = grouped.mean().round(4).astype(str) + " ± " + grouped.std(ddof=0).round(4).astype(str)
     summary = summary.loc[grouped.mean()["pr_auc"].sort_values(ascending=False).index]
-    summary.to_csv(OUTPUT_DIR / "c1_summary.csv")
+    summary.to_csv(OUTPUT_DIR / f"{tag}_summary.csv")
 
     # Seed-averaged scores for the hypothesis tests.
     mean_score = {f: np.mean([preds[f"{f}_tuned__s{s}"] for s in SEEDS], axis=0) for f in FAMILIES}
@@ -215,7 +217,7 @@ def run(tuning: pd.DataFrame | None = None) -> dict:
             tests[f"secondary_{f}_vs_logreg"] = b2_kev.paired_bootstrap(y, mean_score[f], mean_score["logreg"])
             tests[f"secondary_{f}_vs_decision_tree"] = b2_kev.paired_bootstrap(y, mean_score[f], mean_score["decision_tree"])
     tests_df = pd.DataFrame(tests).T
-    tests_df.to_csv(OUTPUT_DIR / "c1_hypothesis_tests.csv")
+    tests_df.to_csv(OUTPUT_DIR / f"{tag}_hypothesis_tests.csv")
     h2 = all(tests[k]["pr_auc_ci_low"] > 0 for k in tests if k.startswith("H2_"))
     h1b_key = f"H1b_{best_overall}_vs_epss_pit"
     h1b = tests[h1b_key]["pr_auc_ci_low"] > 0 and tests[h1b_key]["p_at_100_ci_low"] > 0
@@ -232,18 +234,18 @@ def run(tuning: pd.DataFrame | None = None) -> dict:
                 m: np.mean([fn(y[idx], preds[f"{f}_tuned__s{s}"][idx]) for s in SEEDS])
                 for m, fn in MONTHLY_METRICS.items()}})
     monthly = pd.DataFrame(monthly)
-    monthly.to_csv(OUTPUT_DIR / "c1_monthly_metrics.csv", index=False)
+    monthly.to_csv(OUTPUT_DIR / f"{tag}_monthly_metrics.csv", index=False)
     friedman = {}
     for m in MONTHLY_METRICS:
         fn = friedman_nemenyi(monthly.pivot(index="month", columns="family", values=m))
-        fn["nemenyi"].to_csv(OUTPUT_DIR / f"c1_nemenyi_{m}.csv")
+        fn["nemenyi"].to_csv(OUTPUT_DIR / f"{tag}_nemenyi_{m}.csv")
         friedman[m] = {"statistic": fn["statistic"], "p_value": fn["p_value"], "n_months": fn["n_blocks"],
                        **{f"rank_{k}": v for k, v in fn["mean_ranks"].items()}}
-    pd.DataFrame(friedman).T.to_csv(OUTPUT_DIR / "c1_friedman.csv")
+    pd.DataFrame(friedman).T.to_csv(OUTPUT_DIR / f"{tag}_friedman.csv")
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    pd.concat([b2[["cve_id", "published_date", "scoring_date", "y"]], pd.DataFrame(preds)], axis=1).to_pickle(PREDICTIONS_PATH)
-    pd.Series({f: json.dumps(c["config"]) for f, c in chosen.items()}).to_csv(OUTPUT_DIR / "c1_selected_configs.csv",
+    pd.concat([b2[["cve_id", "published_date", "scoring_date", "y"]], pd.DataFrame(preds)], axis=1).to_pickle(CACHE_DIR / f"{tag}_test_predictions.pkl")
+    pd.Series({f: json.dumps(c["config"]) for f, c in chosen.items()}).to_csv(OUTPUT_DIR / f"{tag}_selected_configs.csv",
                                                                              header=["config"])
 
     means, stds = grouped.mean(), grouped.std(ddof=0)
@@ -251,16 +253,17 @@ def run(tuning: pd.DataFrame | None = None) -> dict:
         m = {f"{k}_mean": means.loc[(family, variant), k] for k in metrics}
         m.update({f"{k}_std": stds.loc[(family, variant), k] for k in metrics})
         m["val_pr_auc"] = chosen[family]["val_pr_auc"] if variant == "tuned" else float(
-            tuning[(tuning.family == family) & (tuning.config_id == "default")].val_pr_auc.iloc[0])
+            tuning[(tuning.family == family) & (tuning.config_id.astype(str) == "default")].val_pr_auc.iloc[0])
         is_summary_run = family == best_overall and variant == "tuned"
         if is_summary_run:
             m.update({f"{k}__{s}": v for k, d in tests.items() for s, v in d.items()})
             m.update({"H2_supported": float(h2), "H1b_supported": float(h1b)})
-        log_experiment("C1", run_name=f"C1_{family}_{variant}",
+        log_experiment("C1", run_name=f"{tag.upper()}_{family}_{variant}",
                        params={"family": family, "variant": variant, "split_date": SPLIT_DATE,
                                "config": json.dumps(chosen[family]["config"]) if variant == "tuned" else "default",
                                "best_gbm": best_gbm, "best_overall": best_overall},
-                       metrics=m, artifacts=sorted(OUTPUT_DIR.glob("c1_*")) if is_summary_run else None)
+                       metrics=m, artifacts=sorted(OUTPUT_DIR.glob(f"{tag}_*")) if is_summary_run else None,
+                       tags={"protocol": "v2" if tag == "c1r" else "v1"})
 
     return {"tuning": tuning, "chosen": chosen, "best_gbm": best_gbm, "best_overall": best_overall,
             "summary": summary, "tests": tests_df, "H2_supported": h2, "H1b_supported": h1b,
