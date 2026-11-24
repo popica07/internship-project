@@ -178,3 +178,88 @@ years `N+1..N+3` up to 2025, where 2025 is restricted to CVEs published by
 2025-11-23 (the last date with a complete 365-day horizon). 2021 itself is
 partially affected (KEV did not yet exist for its first ten months) — stated
 as a caveat on the `N = 2021` row.
+
+---
+
+## Study C addendum — C1 design + Study B exploratory follow-ups (registered 2026-11-24, after Study B, before any Study C model)
+
+Written after seeing Study B (so B results motivate it), but before any C1
+model was fitted or tuned. Nothing below was chosen by looking at a C result.
+
+### C1 — classical model suite
+
+**Data, features, labels, evaluation set:** exactly B2's (split 2023-01-01,
+`src/features.py` primary features incl. point-in-time EPSS, train labels KEV
+as of T via `temporal_labels`, test CVEs already in KEV at their scoring date
+excluded: 309 KEV of 226,463). C1 results are therefore directly comparable
+with every B2 number. No class re-weighting (calibration matters for C5; class
+weighting belongs to C4).
+
+**Families (6):** logistic regression (L2), decision tree, random forest,
+XGBoost, LightGBM, CatBoost. LR/DT/RF get median imputation + missing
+indicators; the three GBM libraries use native missing handling.
+(`libomp` was installed 2026-11-24, so the B2 restriction to scikit-learn GBM
+no longer applies.)
+
+**Tuning — new compared with B2, where nothing was tuned.** One time-ordered
+validation fold, never touching test: fit on CVEs published < 2022-01-01
+(labels KEV as of 2022-01-01: 309 positives), validate on CVEs published in
+2022 (scoring dates and exclusions as in B2; labels KEV as of 2023-01-01:
+39 positives, 26,372 CVEs). Random search, **20 configurations per family**,
+sampled with seed 0 from the fixed spaces below, each fitted once (seed 0);
+the configuration with the highest validation PR-AUC is selected. The selected
+configuration is then refitted on all training data (< 2023-01-01) with 10
+seeds and evaluated once on test. Default-hyperparameter results are reported
+alongside, so the effect of tuning is visible.
+
+*Stated threat:* 39 validation positives make selection noisy (B6 showed the
+same for thresholds). The small budget (20) limits over-fitting to the fold;
+no larger budget will be run after seeing results.
+
+Search spaces (fixed now):
+
+| family | space |
+|---|---|
+| LR | C log-uniform [1e-3, 10] |
+| DT | max_depth 3–20; min_samples_leaf 10–500 (log); criterion {gini, entropy} |
+| RF | 300 trees; max_depth {None, 10, 20, 30}; min_samples_leaf 1–50 (log); max_features {sqrt, 0.3, 0.5} |
+| XGBoost | n_estimators 200–800; learning_rate log [0.01, 0.2]; max_depth 3–10; subsample [0.5, 1]; colsample_bytree [0.5, 1]; min_child_weight 1–20 (log); reg_lambda log [0.1, 10] |
+| LightGBM | n_estimators 200–800; learning_rate log [0.01, 0.2]; num_leaves 15–127 (log); min_child_samples 10–200 (log); subsample [0.5, 1] (freq 1); colsample_bytree [0.5, 1]; reg_lambda log [0.1, 10] |
+| CatBoost | iterations 200–800; learning_rate log [0.01, 0.2]; depth 4–8; l2_leaf_reg log [1, 10] |
+
+No early stopping anywhere (a random validation carve-out of time-ordered data
+is forbidden; tree count is a searched hyperparameter instead).
+
+**H2 (as registered):** GBMs beat LR and single trees on PR-AUC. Operationalised
+now: the GBM family with the best *validation* PR-AUC (chosen without seeing
+test) is compared with LR and with DT by paired bootstrap over test CVEs
+(seed-averaged scores, 500 resamples). H2 is supported if both PR-AUC
+differences have 95% CIs above 0. All three GBM families are reported against
+LR and DT as well, as secondary.
+
+**H1b (new, confirmatory — the second bar after B2):** the best C1 model
+(highest validation PR-AUC across all families) beats point-in-time EPSS on
+PR-AUC *and* P@100, by the same paired bootstrap. The models receive EPSS as a
+feature, so H1b asks whether anything adds value *on top of* EPSS. A failure is
+reported as a headline negative result, exactly as H1 would have been.
+
+**Family comparison (feeds C6):** per-month metrics on B4's monthly batches
+(seed-averaged), Friedman across the 6 families with months as blocks, Nemenyi
+post-hoc; critical-difference diagram in C6.
+
+### Study B exploratory follow-ups (labelled exploratory, never replacing the primary B results)
+
+**B6-R — threshold robustness.** The validated threshold was unstable (39
+validation KEV). Exploratory alternative: the threshold minimising the *mean*
+validation cost over 200 bootstrap resamples of the validation set (same
+validation fold, same models, same ratios). Reported next to the primary
+validated threshold and the Bayes reference; the primary B6 table is
+unchanged.
+
+**B5-M — monthly drift.** B5 had only 9 (N, test-year) cells. Exploratory
+re-analysis of the same B5 models: per test *month* (CVEs grouped by
+publication month), GBM PR-AUC minus CVSS v3 PR-AUC (tie-broken, 10 seeds);
+months with < 3 positives dropped (count reported). Decay is summarised as
+the slope of that margin on months since the end of the training year, per N,
+with a bootstrap CI over months. The registered B5 result (ρ = −0.53,
+p = 0.14) remains the H5 test.
