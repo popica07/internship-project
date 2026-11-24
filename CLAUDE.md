@@ -606,7 +606,10 @@ either without recording the deviation.
 
 **Read before writing any B1 code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
-- `reports/analysis_plan_preregistration.md` — hypotheses fixed in advance
+- `reports/analysis_plan_preregistration.md` — hypotheses fixed in advance,
+  plus the KEV label-timing rule (registered 2026-11-24): train labels are KEV
+  *as of the split date*, today's KEV only as a sensitivity check. Always
+  build labels with `src/evaluation/labels.py::temporal_labels`.
 - Use `src/evaluation/metrics.py` (`evaluate()`) and `src/evaluation/splits.py`
   so every model is scored and split identically.
 

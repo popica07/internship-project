@@ -63,6 +63,23 @@ and any field derived from it; anything computed after the split date.
 - **L3 experiments:** the documented 60/40 formula, reported separately and
   never described as ground truth.
 
+### KEV label timing under a temporal split (registered 2026-11-24, before B1)
+
+`in_kev` is KEV membership *today*. 174 of the 1,038 training-period KEV CVEs
+(published before 2023-01-01) were added to KEV only after that date.
+
+- **Primary:** training labels are KEV **as of the split date**
+  (`kev_date_added < T`; 864 positives); test labels are KEV as of the data
+  snapshot (752 positives). This is exactly what a model built at `T` could
+  have known.
+- **Sensitivity:** training labels are KEV as of today (1,038 positives).
+  Reported alongside the primary result, never in place of it.
+- Implemented once in `src/evaluation/labels.py` (`temporal_labels`); every
+  Study B experiment must use it.
+- **Consequence to state in the write-up:** under the primary rule the 174
+  late-added CVEs are training *negatives*. KEV's lag is therefore label noise
+  in training, which bounds what B2 can achieve (see threat 5).
+
 ## Stopping and reporting rules
 
 - Metrics are those in the locked protocol; no metric will be introduced after
