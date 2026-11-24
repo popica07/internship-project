@@ -717,6 +717,71 @@ housekeeping.
   twice the KEV of CVSS ordering** (top-10: 24.2 vs 11.2; top-50: 53.7 vs
   33.3), so it wins every budget comparison at every ratio.
 
+### Study B exploratory follow-ups (2026-11-24, registered in the Study C addendum)
+
+- **B6-R deviation (before it ran):** the registered rule (minimise *mean*
+  bootstrap cost) is mathematically identical to the primary B6 threshold,
+  because cost is linear in sample weights. Redefined as the median of 200
+  per-resample optimal thresholds. Logged in the pre-registration.
+- **B6-R result:** bagging helps a little, but doesn't fix the instability.
+  At r=50 the cost spread halves (66.7 ± 1.1 vs 67.4 ± 2.2). At r=500 it is
+  600 ± 57 vs 612 ± 61, still worse than the Bayes reference (469). The
+  instability comes from the 39 validation positives, not from the selection
+  rule.
+- **B5-M result:** the monthly margin slope is negative for every training
+  year (per year: 2021 −0.008, 2022 −0.031, 2023 −0.021, 2024 −0.027), and
+  every 95% CI includes 0 (2022 is closest: [−0.0059, 0.0005] per month).
+  1 month dropped (< 3 positives). Same reading as B5: consistent decay,
+  underpowered.
+- `cost_matrix.best_threshold` vectorised for B6-R (8,000 calls). It is
+  verified identical to the loop version on 30 random cases, so the B6
+  numbers are unchanged.
+
+### C1 — classical ML suite (2026-11-24)
+
+- **Design pre-registered** (Study C addendum, commit 32774fa) before any C
+  model ran. Six families, 20-config random search each on the 2022
+  validation fold (39 positives), then 10 seeds on test.
+- **`libomp` installed via Homebrew** (2026-11-24). XGBoost 3.4.1 and LightGBM
+  4.7.0 now load, which lifts the B2-era restriction to scikit-learn GBM.
+- **H2 NOT SUPPORTED. H1b NOT SUPPORTED.** On validation PR-AUC the best GBM
+  and the best model overall were both LightGBM. On test it was the worst of
+  the three GBMs:
+
+  | family | val PR-AUC (selected) | test PR-AUC tuned | test PR-AUC default |
+  |---|---|---|---|
+  | LightGBM | **0.0668** | 0.0098 ± 0.0019 | 0.0057 |
+  | CatBoost | 0.0538 | 0.0191 ± 0.0005 | 0.0080 |
+  | random forest | 0.0505 | 0.0132 ± 0.0005 | 0.0082 |
+  | logreg | 0.0501 | 0.0188 | **0.0235** (= B2) |
+  | XGBoost | 0.0391 | **0.0241 ± 0.0014** | 0.0076 |
+  | decision tree | 0.0216 | 0.0087 ± 0.0010 | 0.0018 |
+
+  H2 (LightGBM − LR) −0.0065 [−0.0204, 0.0042]. H2 (LightGBM − DT) +0.0014
+  [−0.0088, 0.0119]. H1b (LightGBM − EPSS-PIT) −0.0052 [−0.0198, 0.0064].
+- **The real finding: a 39-positive validation fold cannot select models.**
+  Validation rank does not predict test rank (the lowest-validation GBM is the
+  best on test). Tuning LR made it *worse* (0.0235 → 0.0188). This is the
+  threat the addendum named in advance; it is reported as it happened. It
+  is also why B6's thresholds were unstable.
+- **Secondary (registered as secondary — not a substitute for H2):** XGBoost
+  beats DT (+0.0126 [0.0063, 0.0238]) and is borderline vs LR (+0.0047
+  [−0.0009, 0.0117]). CatBoost beats DT, ties LR. **Do not report XGBoost as
+  "the winner": it was picked out on test after the fact, which is exactly
+  what the pre-registration forbids.**
+- Tuning still clearly beats library defaults for every tree ensemble
+  (defaults 0.006–0.008), so the search space was sensible. Selection is
+  the problem, not the space.
+- Friedman across families on 46 monthly batches: significant on all four
+  metrics (MAP p < 1e-4, P@10 p = 0.017). Mean ranks on MAP: logreg 2.59,
+  XGBoost 2.67, CatBoost 3.02.
+- **Implication for C2–C6:** a more stable selection protocol is needed, e.g.
+  several validation folds, or a validation set labelled with a fixed
+  KEV horizon so it has more positives. Pre-register it before C2. Until
+  then, no "best model" claim.
+- The C1 notebook reads the saved outputs. A full re-run takes ~2 h
+  (`python -m src.models.classical`).
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -741,9 +806,14 @@ not fixed by the addendum are in the Deviations Log, B2–B6 entries).
 +0.08 [0.02, 0.15]) — but no learned model beats point-in-time EPSS, and
 logistic regression beats the GBM. H5: consistent decay, not significant
 (ρ = −0.53, p = 0.14, 9 cells). B6: GBM wins every monthly-budget policy.
-**Next study:** Study C — model comparison (C1 first; H2 now has a live
-counter-example: logreg > GBM in B2). Reuse `src/features.py` and the B2
-evaluation set so C results are comparable with B.
+**Active study:** Study C — model comparison (pre-registered: addendum in
+`reports/analysis_plan_preregistration.md`, commit 32774fa).
+**Done:** C1 — H2 and H1b NOT supported. The 2022 validation fold (39 KEV)
+could not select models: LightGBM was best on validation and worst of the
+three GBMs on test. See the Deviations Log (C1). Exploratory B5-M / B6-R done.
+**Next:** pre-register a more stable selection protocol (multi-fold or
+fixed-horizon validation) *before* C2, then C2 learning-to-rank. Reuse
+`src/features.py` and the B2 evaluation set.
 
 **Read before writing any Study B/C code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
@@ -795,6 +865,8 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] B4: monthly ranking (Friedman + Nemenyi + Wilcoxon)
 - [x] B5: temporal drift (H5 direction consistent, p = 0.14)
 - [x] B6: cost-sensitive evaluation
+- [x] B5-M / B6-R: exploratory follow-ups
+- [x] C1: classical ML suite (H2, H1b not supported; selection unreliable)
 
 **Update this checklist as experiments complete.**
 

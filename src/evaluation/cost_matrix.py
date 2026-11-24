@@ -19,9 +19,19 @@ def expected_cost(y_true, decide, cost_ratio: float) -> float:
 
 
 def best_threshold(y_true, y_prob, cost_ratio: float) -> float:
-    """Threshold minimising cost on the given (validation) data."""
-    candidates = np.unique(np.concatenate([np.quantile(y_prob, np.linspace(0, 1, 2001)), [np.inf]]))
-    costs = [expected_cost(y_true, y_prob >= t, cost_ratio) for t in candidates]
+    """Threshold minimising cost on the given (validation) data.
+
+    Candidates: 2001 quantiles of y_prob plus +inf (remediate nothing). Costs
+    are computed for all candidates at once with sorted counts (same result as
+    evaluating expected_cost per candidate, much faster).
+    """
+    y = np.asarray(y_true).astype(bool)
+    p = np.asarray(y_prob, float)
+    candidates = np.unique(np.concatenate([np.quantile(p, np.linspace(0, 1, 2001)), [np.inf]]))
+    pos, neg = np.sort(p[y]), np.sort(p[~y])
+    false_negatives = np.searchsorted(pos, candidates, side="left")         # positives with p < t
+    false_positives = len(neg) - np.searchsorted(neg, candidates, side="left")  # negatives with p >= t
+    costs = cost_ratio * false_negatives + false_positives
     return float(candidates[int(np.argmin(costs))])
 
 
