@@ -582,6 +582,40 @@ housekeeping.
   `notebooks/data/` when run from `notebooks/` (they now `chdir` to the root);
   `data/snapshots/` was not gitignored (rule 10).
 
+### B1 — baseline battery (2026-11-24)
+
+- **CVSS v4 was never extracted by A1** (parser kept only v3.1/v3.0/v2).
+  Re-parsed from the cached NVD pages into `data/processed/l1_cvss_v4.csv` via
+  `src/ingestion/cvss_v4.py` — no network, and L1 itself deliberately not
+  rebuilt (a rebuild on a new day pulls a new KEV snapshot and moves labels).
+- **CVSS v4 barely exists in NVD:** 21.4% of test CVEs have one, and 48,678 of
+  48,679 are CNA-supplied (`Secondary`); NVD scored exactly one itself. 118 of
+  752 test KEV CVEs carry v4. v4 is therefore compared to v3 only on the v4
+  subset — on the full set the comparison would measure coverage, not quality.
+- **Ties decide CVSS top-k.** 84 distinct CVSS scores in 227k test CVEs (one
+  value shared by 16,265). Every baseline breaks ties uniformly at random per
+  seed, 10 seeds; the std is the honest width of "sort by CVSS" as a policy.
+- **Results (test ≥ 2023-01-01, 752 KEV of 227,026, base rate 0.0033):**
+
+  | baseline | PR-AUC | P@100 | ROC-AUC |
+  |---|---|---|---|
+  | epss_current *(leaky reference)* | 0.413 | 0.86 | 0.979 |
+  | **cvss_v3 — the bar to beat** | **0.0148 ± 0.0007** | **0.037 ± 0.015** | 0.786 |
+  | severity_label | 0.0104 ± 0.0004 | 0.016 ± 0.011 | 0.763 |
+  | cvss_v4 (missing ranked last) | 0.0056 ± 0.0002 | 0.028 ± 0.008 | 0.480 |
+  | random | 0.0034 ± 0.0002 | 0.002 ± 0.004 | 0.502 |
+  | recency (newest first) | 0.0025 | 0.000 | 0.393 |
+
+  On the v4 subset v4 ≈ v3 (PR-AUC 0.0189 ± 0.0009 vs 0.0171 ± 0.0011).
+- **ROC-AUC demotion vindicated on real data:** CVSS v3 scores ROC-AUC 0.786
+  while 96 of its top 100 are not exploited.
+- **Recency is worse than random because of KEV lag**, not because new CVEs are
+  safe: test KEV rate falls 0.54% (2023) → 0.40% (2024–25) → 0.21% (2026) —
+  recent CVEs have not yet had time to be observed exploited. **Carry into B5:**
+  part of any measured "temporal decay" will be label immaturity in the later
+  test years, not model drift. Must be separated there.
+- **EPSS-current calibration:** Brier 0.0038, ECE 0.0075 (96.7% coverage).
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -601,8 +635,10 @@ protocol was amended once (November L1 refresh, counts only). Do not change
 either without recording the deviation.
 
 **Active study:** Study B — Exploitation Prediction & Baselines
-**Current experiment:** B1 — baseline battery
-**Current task:** CVSS ordering, severity label, recency, EPSS-current, random
+**Done:** B1 — baseline battery (bar to beat: CVSS v3, PR-AUC 0.0148, P@100 0.037)
+**Current experiment:** B2 — KEV membership prediction
+**Current task:** feature table (pre-registered features only, point-in-time EPSS),
+labels via `temporal_labels` (primary + sensitivity), 10 seeds
 
 **Read before writing any B1 code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
@@ -648,6 +684,7 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] A4: remediation clusters
 - [x] A5: estate simulator
 - [x] A6: EDA + evaluation protocol locked
+- [x] B1: baseline battery
 
 **Update this checklist as experiments complete.**
 
