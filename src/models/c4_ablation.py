@@ -134,7 +134,7 @@ def run_l1() -> dict:
     log_experiment("C4", run_name="C4_l1_ablation_imbalance",
                    params={"feature_sets": ",".join(sets), "undersample_ratio": UNDERSAMPLE_RATIO,
                            "models": "C1-R selected xgboost + logreg (not re-tuned)"},
-                   metrics={**{f"pr_auc_{k}_{v}_{m}": float(x) for (k, v, m), x in
+                   metrics={**{f"pr_auc_{k}_{v}_{m}".replace("+", "-"): float(x) for (k, v, m), x in
                                results.groupby(["kind", "variant", "model"]).pr_auc.mean().items()},
                             **{f"brier_{v}_{m}": float(x) for (v, m), x in calib.brier.items()}},
                    artifacts=sorted(OUTPUT_DIR.glob("c4_l1_*")), tags={"protocol": "v2"})

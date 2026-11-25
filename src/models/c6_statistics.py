@@ -70,7 +70,8 @@ def holm(p: pd.Series) -> pd.Series:
 
 def cd_figure(ranks: pd.Series, nemenyi: pd.DataFrame, metric: str, n_blocks: int, path: Path):
     fig, ax = plt.subplots(figsize=(10, 0.32 * len(ranks) + 1.5))
-    sp.critical_difference_diagram(ranks, nemenyi, ax=ax, alpha=0.05)
+    # copy: scikit-posthocs 0.16 overwrites the p-value matrix in place with 0/1 flags
+    sp.critical_difference_diagram(ranks, nemenyi.copy(), ax=ax, alpha=0.05)
     ax.set_title(f"Critical-difference diagram — monthly {metric} ({n_blocks} months, Nemenyi α = 0.05)")
     fig.tight_layout()
     fig.savefig(path, dpi=150)

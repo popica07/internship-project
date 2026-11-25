@@ -160,6 +160,7 @@ def reliability_figure(y, curves: dict, path: Path, title: str):
         ax.plot([1e-5, lim], [1e-5, lim], "--", color="grey", lw=1)
         ax.set(xscale="log", xlim=(1e-5, lim), title=name, xlabel="mean predicted", ylabel="observed KEV rate")
         ax.set_yscale("symlog", linthresh=1e-4)
+        ax.set_ylim(0, lim)
         ax.legend(fontsize=7)
     for ax in list(axes.flat)[len(names):]:
         ax.axis("off")

@@ -811,6 +811,59 @@ housekeeping.
 - Code `src/models/c1_revised.py`; notebook `C1R_selection_protocol_v2.ipynb`;
   outputs `outputs/c1r_*`; MLflow runs `C1R_*` (tag protocol=v2).
 
+### C2–C6 — rest of Study C (2026-11-24/25, protocol v2, pre-registered 59bd4b1)
+
+- **Registered before any C2–C6 model** (Study C addendum 2). Run beforehand:
+  only a cached matrix build (`src/models/study_c_data.py`, identical to C1-R)
+  and a one-epoch speed benchmark of the deep models (no scores) that set
+  the deep search budgets (MLP 20, TabNet 10, FT-Transformer 8).
+- **C2 learning-to-rank — H3 NOT SUPPORTED.** Six boosted contenders differing
+  only in objective, all selected on validation monthly NDCG@100. Selected:
+  LightGBM LambdaMART vs LightGBM binary. Monthly test NDCG@100 difference
+  +0.0049 [−0.0061, 0.0158] (46 months), Wilcoxon p = 0.68. Global PR-AUC:
+  LambdaMART 0.0207, XGB-LambdaMART 0.0205, pairwise 0.0194, binary
+  0.0179–0.0185, XE-NDCG 0.0114 (fails). Pairwise has best global NDCG@100
+  (0.151). Nothing significant vs EPSS-PIT.
+- **C3 deep tabular — H4 SUPPORTED (non-superiority form only).** Best-val
+  deep = FT-Transformer (one config at val 0.091; its other 7 were
+  0.004–0.011). Test PR-AUC: FT-T 0.0210 ± 0.0017, MLP 0.0175, TabNet
+  0.0166. FT-T − XGBoost +0.0003 [−0.0043, 0.0087]: no difference detected
+  either way (GBM not significantly better). MLP significantly below LR.
+  FT-T ≈ 8 min/fit vs ≈ 5 s for XGBoost, and the noisiest across seeds.
+- **C4 ablation (L1):** EPSS carries the signal — without it every model is
+  at CVSS-baseline level (CVSS+text ≈ 0.007); CVSS+EPSS ≈ all features
+  (XGB −0.0023 [−0.0068, 0.0012]); text adds little. **Imbalance:**
+  weighting/undersampling never changes PR-AUC/P@100 significantly but wrecks
+  calibration (Brier 0.0014 → 0.064 at full weight) — train unweighted.
+  **L3 (simulated):** finding-only 0.388, context-only 0.388, all 0.998 PR-AUC
+  — the model recovers the documented formula; neither half suffices alone.
+- **C5 calibration:** unweighted models near-calibrated raw (Brier
+  0.00135–0.00141; constant base rate 0.00136). Platt significantly improves
+  DT, RF, CatBoost, TabNet, C2 XGB-binary and repairs all weighted models;
+  no gain for LR/XGBoost/LightGBM/FT-T/MLP. Isotonic lowers PR-AUC (ties).
+  **Adaptive ECE (15 equal-mass bins) added** next to the locked ECE because
+  equal-width bins collapse at a 0.14% base rate.
+- **C6 (17 methods, 46 months):** Friedman p < 1e-4 on MAP, P@10, NDCG@10,
+  NDCG@100 (MRR p = 0.08). Best MAP mean rank: LR (6.5). After Holm, LR is
+  indistinguishable from the 8 other boosted/LTR models, MLP and EPSS-PIT;
+  significantly better than DT, RF, XE-NDCG, FT-T, TabNet, CVSS v3. **No
+  model beats EPSS-PIT month by month on any metric after Holm.**
+- **Deviations / incidents (none change a registered decision):**
+  (1) C4 first run crashed at MLflow logging (`+` in metric names) after
+  outputs were written; names fixed, C4 re-run in full, failed run deleted.
+  (2) torch segfaults if imported after LightGBM/XGBoost (two OpenMP
+  runtimes); `c3_deep.py` imports torch first. (3) `scikit-posthocs` 0.16
+  `critical_difference_diagram` overwrites its p-value matrix with 0/1 flags,
+  which corrupted the `nemenyi_p` column of the C6 Wilcoxon table (saved
+  Nemenyi CSVs and diagrams were correct); fixed by passing a copy, C6
+  re-run. (4) C5 reliability y-limits fixed, C5 re-run: numbers identical.
+  (5) L3 `noise_level` is 0.0, so the registered clean-vs-noisy L3 check is
+  vacuous (identical by construction). (6) Laptop slept on battery during
+  C3 final (one FT-T seed took 8.8 h wall clock); results unaffected.
+- Code `src/models/c2_ltr.py`, `c3_deep.py`, `c4_ablation.py`,
+  `c5_calibration.py`, `c6_statistics.py`; notebooks C2–C6; MLflow runs
+  `C2_*`–`C6_*` (tag protocol=v2).
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -835,18 +888,17 @@ not fixed by the addendum are in the Deviations Log, B2–B6 entries).
 +0.08 [0.02, 0.15]) — but no learned model beats point-in-time EPSS, and
 logistic regression beats the GBM. H5: consistent decay, not significant
 (ρ = −0.53, p = 0.14, 9 cells). B6: GBM wins every monthly-budget policy.
-**Active study:** Study C — model comparison (pre-registered: addendum in
-`reports/analysis_plan_preregistration.md`, commit 32774fa).
-**Done:** C1 — H2 and H1b NOT supported. The 2022 validation fold (39 KEV)
-could not select models: LightGBM was best on validation and worst of the
-three GBMs on test. See the Deviations Log (C1). Exploratory B5-M / B6-R done.
-**Done:** C1-R under selection protocol v2 (145 validation KEV, pre-registered
-e21fe21): H2 still not supported; H1b partial (LR beats EPSS-PIT on PR-AUC
-+0.0060 [0.0013, 0.0121], not on P@100); v2 fold ranks configs far more like
-test (pooled ρ 0.68 → 0.78). See Deviations Log (C1-R).
-**Next:** C2 learning-to-rank, with model/hyperparameter selection on the v2
-fold (binding). Reuse `src/features.py`, `src/models/c1_revised.py` fold
-constants and the B2 evaluation set.
+**STUDY C IS COMPLETE** (C1 + C1-R + C2–C6, 2026-11-24/25; Deviations Log).
+**Headline:** H2 not supported (LR ≥ GBMs), H3 not supported (LTR objectives
+do not matter measurably), H4 supported only as "no difference" (deep ≈ GBM,
+at ~100× the compute). EPSS-PIT is the feature that matters; LR beats
+EPSS-PIT on global PR-AUC (+0.0060 [0.0013, 0.0121], C1-R, post-hoc) but no
+model beats it month by month after Holm (C6). Train unweighted; Platt if
+probabilities are needed.
+**Next:** Study D (explainability). Natural primary model: C1-R logistic
+regression (best/indistinguishable from the best, transparent), with C1-R
+XGBoost for TreeSHAP. Pre-register D1–D6 before running. Reuse
+`src/models/study_c_data.py`.
 
 **Read before writing any Study B/C code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
@@ -901,6 +953,11 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] B5-M / B6-R: exploratory follow-ups
 - [x] C1: classical ML suite (H2, H1b not supported; selection unreliable)
 - [x] C1-R: protocol v2 re-run (H2 no; H1b partial; selection reliable)
+- [x] C2: learning-to-rank (H3 not supported)
+- [x] C3: deep tabular (H4 supported, non-superiority only)
+- [x] C4: feature ablation + imbalance (+ L3 simulated)
+- [x] C5: calibration (Platt recommended)
+- [x] C6: Friedman/Nemenyi/CD diagrams across 17 methods
 
 **Update this checklist as experiments complete.**
 
