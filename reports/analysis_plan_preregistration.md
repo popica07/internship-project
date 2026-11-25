@@ -461,3 +461,164 @@ diagrams** (α = 0.05). (3) Wilcoxon of every model vs the best mean-rank
 model and vs point-in-time EPSS, Holm-adjusted per metric. Stated caveat:
 with 17 methods and 46 blocks Nemenyi is conservative; Wilcoxon-Holm is the
 more powerful, reported alongside, never instead.
+
+---
+
+## Study D addendum — D1–D6 design (registered 2026-11-25, after Study C, before any Study D explanation or model)
+
+Written after Study C was complete and before any Study D explanation was
+computed or any D4 model was scored. Run beforehand, and only on **training
+data** (no validation or test score computed): (a) a check that refitting the
+TF-IDF→SVD text model on the training rows reproduces the cached `text_*`
+columns exactly (max |diff| = 0.0), so each component can be labelled by its
+top terms; (b) a fit-time benchmark of the D4 models on the v2-fold training
+rows: EBM ≈ 430 s, RuleFit (50k rows) ≈ 70 s, GOSDT threshold-guess
+binarisation (200 stumps of depth 2 → 58 binary features) ≈ 540 s. In the
+benchmark GOSDT **with plain misclassification loss returned a single leaf
+("not KEV")** at the 1:250 base rate; with `balance=True` depth 3 fitted in
+13 s while depths 4–5 returned nothing within the benchmark. That is the only
+reason the sparse-tree design below differs from a default GOSDT run.
+`imodels` 3.0.4 and `gosdt` 1.0.4 were added to the environment (no other
+package changed).
+
+**Common to D1–D5.** Data, features, labels and test set are C1-R's (B2
+evaluation set, 226,463 CVEs, 309 KEV). Models explained: **M-LR** = C1-R
+logistic regression (selected config, deterministic) and **M-XGB** = C1-R
+XGBoost (selected config; seed 0 for every primary explanation, seeds 0–9
+for stability). Both are refitted on the full training set exactly as in
+C1-R; their test scores must reproduce the cached C1-R predictions (checked,
+run aborts otherwise). Attributions are in **log-odds** (LR: decision
+function; XGB: margin). Feature groups for group-level summaries: CVSS (3),
+text (64), EPSS-PIT (2). Each text component is reported with its 10
+highest-|loading| TF-IDF terms.
+
+*Explanation sets (drawn once, seed 0, before any explanation is computed).*
+"Complete case" = CVSS score and point-in-time EPSS both present.
+- **E-rand:** 1,000 test CVEs, uniform among complete-case test rows — the
+  primary set for every agreement/stability statistic;
+- **E-top:** per monthly batch, the 10 complete-case CVEs with the highest
+  seed-mean C1-R XGBoost score (≤ 460) — what an analyst would actually read;
+- **E-kev:** every complete-case KEV positive in test.
+- **G-sample:** 10,000 random test rows (all, missing values included) for
+  global SHAP summaries.
+SHAP background: 1,000 random training rows (seed 0), shared by both models.
+
+### D1 — global explainability (descriptive)
+
+(1) **SHAP:** interventional TreeSHAP for M-XGB, exact linear SHAP for M-LR
+(φⱼ = βⱼ(zⱼ − E_bg zⱼ) in the imputed, scaled space; missing-indicator
+columns folded into their source feature), on G-sample. Mean |φ| per feature
+and per group; beeswarm of the top 15. (2) **Permutation importance** on the
+full test set, metric PR-AUC, 10 repeats (seeds 0–9), per group and per
+feature (each group permuted jointly for group importance). (3) **ALE**
+(first order, 20 quantile bins, own implementation) on a 20,000-row random
+test sample for `epss_pit`, `epss_pit_pct`, `cvss_score` and the three text
+components with the largest M-XGB mean |φ|, both models. (4) **Global
+agreement:** Kendall's τ-b between the 69-feature rankings by mean |SHAP|,
+by permutation importance, and across the two models.
+(5) **L3 explanation-correctness check (SIMULATED, exploratory, reported
+separately):** on L3 the label's generating formula is known, so explanations
+can be checked against it. XGBoost, library defaults, `priority_label` ∈
+{High, Critical}, grouped-by-asset 80/20 split (seed 0), C4's feature list;
+TreeSHAP on the held-out split. Reported: the share of total mean |φ| that
+falls on features the formula uses (source layer, base severity, EPSS
+percentile, in_kev, public_exploit, criticality tier, internet-facing,
+regulatory/PCI/DORA scope, SLA breached, recurrence) versus features it does
+not use, and Kendall's τ between SHAP importance and the formula's own
+importance (mean |wⱼ(xⱼ − E xⱼ)| on the score).
+
+### D2 — local explainability (descriptive)
+
+TreeSHAP (M-XGB) / linear SHAP (M-LR) and **LIME** (`lime` 0.2.0.1,
+`LimeTabularExplainer`, continuous features not discretised,
+`sample_around_instance=True`, 5,000 samples, all 69 features, default
+kernel width, explaining P(KEV); LIME training statistics from complete-case
+training rows; LIME seed 0) on E-rand ∪ E-top ∪ E-kev. LIME's weight vector
+as returned by `explain_instance` is the LIME attribution. LIME local R²
+reported. **Case studies** (fixed selection rule): from E-top under M-XGB,
+the three highest-ranked KEV hits, the three highest-ranked non-KEV
+findings, and from E-kev the three KEV positives ranked lowest within their
+month — SHAP waterfall + LIME bar + top text terms, shown side by side.
+
+### D3 — counterfactual explanations (descriptive)
+
+*L3 (SIMULATED, primary for D3 because only L3 has actionable context):* the
+D1(5) model; 100 held-out findings predicted High/Critical (p ≥ 0.5),
+random seed 0; **DiCE** (`dice-ml` 0.12, method "random", 4 counterfactuals
+per finding, desired class 0) varying only remediation levers an engineer
+controls: `internet_facing`, `has_admin_path`, `admin_principal_count`,
+`principal_count` (ranges = observed training ranges). Reported: share of
+findings with ≥ 1 valid CF; validity under the model; **validity under the
+true formula** (the CF row re-scored with the documented L3 weights; the
+re-scorer must reproduce `priority_score` exactly on the original rows);
+sparsity (features changed); diversity. Expected and stated in advance: the
+formula uses `internet_facing` but not the IAM features, so a CF that relies
+only on IAM levers and is "valid" under the model is a model artefact.
+*L1 (descriptive):* a CVE's CVSS and description do not change, so the only
+meaningful what-if is EPSS. For each E-rand CVE ranked below its month's
+top-100 under M-XGB, the **minimum `epss_pit`** (with `epss_pit_pct` set by
+that scoring date's empirical EPSS→percentile map) at which its score
+reaches τ₁₀₀ — the median over months of the 100th-highest seed-0 score —
+found by monotone 1-D search on a 200-point grid. This is a deterministic
+search, not DiCE: DiCE varying score and percentile independently would
+produce impossible EPSS pairs. Reported: distribution of required EPSS
+uplift; share of CVEs that no EPSS value escalates.
+
+### D4 — interpretable models (descriptive: "price of interpretability")
+
+Models: **EBM** (`interpret` 0.7.8), **RuleFit** (`imodels` 3.0.4),
+**sparse optimal tree** (GOSDT 1.0.4, `balance=True`, threshold-guess
+binarisation with 200 depth-2 stumps; leaf score = training KEV rate of the
+leaf, so the tree ranks). RuleFit and GOSDT get median imputation + missing
+indicators fitted on training rows; EBM handles missing values natively.
+*Search* on the v2 fold, selected by validation PR-AUC (as C1-R), one fit
+per config with seed 0:
+- EBM: `interactions` ∈ {0, 10} × `learning_rate` ∈ {0.015, 0.04} (4);
+- RuleFit: `max_rules` ∈ {10, 30, 60} (3);
+- GOSDT: `depth_budget` ∈ {3, 4} × `regularization` ∈ {0.001, 0.005}
+  (4; time limit 900 s per fit). **Fallback, fixed now:** if no GOSDT config
+  returns a tree with > 1 leaf, class-weighted CART with max depth ∈ {3, 4}
+  replaces it and is labelled as such.
+Final: selected config on the full training set, 10 seeds (GOSDT and its
+binarisation are deterministic apart from the stump seed; the stump seed is
+varied), test once. Reported: PR-AUC, P@100, NDCG@100, Brier, mean ± std;
+paired bootstrap of PR-AUC vs C1-R LR, C1-R XGBoost and EPSS-PIT; model size
+(terms / rules / leaves). EBM's global term importances join D1(4)'s
+agreement table.
+
+### D5 — stability and agreement (H6)
+
+*H6 (as registered: SHAP and LIME disagree materially on per-finding
+attributions), operationalised now.* For each E-rand CVE, Kendall's τ-b
+between |TreeSHAP| and |LIME| over all 69 features (M-XGB, both seed 0).
+Statistic: the **median τ over E-rand**, 95% CI by bootstrap over instances
+(2,000 resamples). "Material disagreement" means τ < 0.5. **H6 is supported
+if the CI upper bound is < 0.5, not supported if the CI lower bound is
+≥ 0.5, inconclusive otherwise.**
+*Secondary (reported, never in place of H6):* the same on E-top and E-kev
+and for M-LR; top-5 feature agreement (|top-5 ∩ top-5| / 5) and top-5 sign
+agreement; τ over the three group attributions.
+*Noise ceilings, to tell systematic disagreement from sampling noise:*
+(a) **LIME self-agreement:** LIME seeds 0–9 on the first 200 E-rand CVEs, τ
+between seed 0 and each other seed; (b) **SHAP model-seed stability:** M-XGB
+refitted with seeds 1–9, τ between its TreeSHAP and seed 0's on E-rand;
+(c) SHAP–LIME τ vs LIME–LIME τ on the same 200 CVEs by Wilcoxon (is SHAP–LIME
+disagreement larger than LIME's own noise?). Also reported: the global
+ranking agreement from D1(4).
+
+### D6 — human evaluation (protocol and materials; data collection outside this pipeline)
+
+D6 needs CSO engineers as participants; no participant data can be produced
+here, and none will be simulated or invented. Deliverables: a study protocol
+(within-subject; six formats — F0 score and rank only (control), F1 SHAP
+waterfall, F2 LIME bar chart, F3 counterfactual "what-if" text, F4 EBM term
+contributions, F5 template-generated plain-language summary of the top three
+SHAP factors; a 6×6 Latin square for format order; tasks: forward simulation
+"which of two findings does the model rank higher", comprehension items,
+trust (short trust-in-automation scale), agreement with the ranking, decision
+time), a pre-specified analysis (Friedman + Nemenyi across formats on
+per-participant means, Wilcoxon-Holm vs F0; target n ≥ 12, with the
+detectable effect size stated), and the rendered stimulus set built only from
+**public L1 CVEs** (no internal data). Ethics review (DACS) and CSO approval
+are prerequisites, recorded in the protocol. D6 results are reported as "not
+yet collected" until real sessions take place.

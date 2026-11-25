@@ -30,6 +30,8 @@ shap==0.52.0
 lime==0.2.0.1
 interpret==0.7.8
 dice-ml==0.12
+imodels==3.0.4
+gosdt==1.0.4
 
 # Statistical testing
 scipy==1.13.1
