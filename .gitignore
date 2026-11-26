@@ -32,3 +32,4 @@ outputs/*
 # OS
 .DS_Store
 logs/
+.venv

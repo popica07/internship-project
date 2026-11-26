@@ -97,7 +97,8 @@ def build() -> dict:
 
     trig, _ = epss_triggers(s.index.to_numpy())  # same D3 L1 rule, for the stimulus CVEs
     trig = trig.set_index("cve_id")
-    ebm = pd.read_pickle(c.CACHE_DIR / "d4_ebm_s0.pkl").m
+    from src.models.d4_interpretable import load_model
+    ebm = load_model(c.CACHE_DIR / "d4_ebm_s0.pkl").m
     ebm_pred = pd.read_pickle(c.CACHE_DIR / "d4_test_predictions.pkl")["ebm__s0"].to_numpy()
     ebm_rank = pd.Series(ebm_pred).groupby(d["group_eval"]).rank(ascending=False, method="first").to_numpy()
     r_all = month_ranks()

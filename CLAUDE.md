@@ -864,6 +864,119 @@ housekeeping.
   `c5_calibration.py`, `c6_statistics.py`; notebooks C2–C6; MLflow runs
   `C2_*`–`C6_*` (tag protocol=v2).
 
+### Study D — explainability (2026-11-25, pre-registered c0a3ee1)
+
+- **Registered before any explanation was computed.** Run beforehand, on
+  training data only:
+  - a check that refitting the text model reproduces the cached `text_*`
+    columns exactly, so components can be labelled by their top terms;
+  - a D4 fit-time benchmark.
+- **Dependencies added:** `imodels` 3.0.4 and `gosdt` 1.0.4.
+- **GOSDT degenerates at a 1:250 base rate.** With misclassification loss the
+  optimal sparse tree is one "not KEV" leaf, and the model has no ranking
+  scores. Registered design: `balance=True`, leaves scored by their training
+  KEV rate, and a class-weighted CART fallback.
+- **Library workarounds:**
+  - XGBoost 3 sets `enable_categorical=True` by default. SHAP 0.52 then
+    refuses interventional TreeSHAP even though every feature is float, so
+    the Booster is passed instead.
+  - SHAP silently subsamples a background to 100 rows unless a masker with
+    `max_samples` is given.
+  - DiCE rejects NaN query rows. Non-lever NaNs travel through DiCE as a
+    sentinel value and are restored before prediction (checked: the wrapper
+    reproduces the model exactly).
+  - The v2-fold `epss_pit_pct` column is entirely NaN, because EPSS v1 had no
+    percentile.
+- **D1:** global SHAP and permutation importance disagree (τ ≈ 0.17).
+  Permutation importance says EPSS-PIT carries about 80% of PR-AUC, in line
+  with the C4 ablation. Training-background SHAP gives EPSS only 14–15% of
+  attribution mass and puts `cvss_version` first.
+- **L3 explanation-correctness check (simulated):** 86% of SHAP mass falls on
+  formula features, and τ = 0.61 against the formula's own term importance.
+  But the correlated `epss_score`, which is *not* in the formula, gets twice
+  the attribution of `epss_percentile`, which is.
+- **D2:** LIME local R² for M-XGB has a median of 0.37. `cvss_version`
+  dominates both SHAP (via the background) and LIME (via perturbation).
+- **D3:**
+  - **L3 (simulated):** 36 of 100 flagged findings can be de-escalated, every
+    time by removing internet exposure. 96.5% of the model-valid
+    counterfactuals are also valid under the true formula. The one IAM-only
+    counterfactual is invalid under the formula, which is the predicted
+    model artefact.
+  - DiCE "random" adds a superfluous IAM change to 99.3% of valid
+    counterfactuals. This was found by an exploratory check added after a
+    5-finding pilot.
+  - **L1:** the median EPSS needed to enter the monthly top-100 is 0.021,
+    against a current median of 0.0005.
+  - The first D3 run crashed on NaN and its MLflow run was deleted; the code
+    was fixed and D3 re-run in full.
+- **D5, H6 SUPPORTED:** median τ |SHAP| vs |LIME| = 0.350 [0.344, 0.354],
+  below the registered 0.5 threshold.
+  - Full-ranking τ is mostly LIME noise: LIME agrees with itself at only
+    τ = 0.37, against 0.66 for SHAP across model seeds.
+  - The top-5 disagreement is systematic. Within-method top-5 overlap is 88%
+    (LIME across seeds) and 93% (SHAP across model seeds); between methods it
+    is 54%, with only 25% sign agreement. SHAP explains the deviation from a
+    background; LIME explains the local slope.
+- **EXPLORATORY, not pre-registered — SHAP background artefact.**
+  - Test CVEs are 90% CVSS v3.1; the training background is 34% v2.0.
+  - `cvss_version` takes 51% of M-XGB's |SHAP| mass (38% for LR). With a
+    test-era background it takes 15% (4%).
+  - The global ranking otherwise holds (τ ≈ 0.91), and H6 is unchanged
+    (τ 0.32).
+  - Deployment rule: draw the SHAP background from the population being
+    scored.
+- **D4 — price of interpretability (descriptive):**
+  - **Selected on the v2 fold:** EBM with no interactions and lr 0.015,
+    RuleFit with 60 rules, GOSDT with depth 3 and regularisation 0.005.
+  - **10 seeds, test PR-AUC:** EBM 0.0187 ± 0.0007, RuleFit 0.0196 ± 0.0018,
+    GOSDT 0.0027 ± 0.0001.
+  - **EBM and RuleFit** are not distinguishable from C1-R LR, C1-R XGBoost or
+    EPSS-PIT: every paired-bootstrap CI includes 0.
+  - **The GOSDT tree** has 3 leaves (ROC 0.63) and is significantly worse than
+    all three references.
+  - **Reading:** interpretability costs nothing here, because the best model,
+    LR, is already transparent. No glass-box model beats it.
+  - **Agreement table:** EBM term importance joins D1's table
+    (`d4_global_ranking_agreement.csv`). It agrees best with SHAP M-XGB
+    (τ 0.42) and worst with permutation importance (0.09–0.18).
+- **D4 incident — GOSDT depth 4 exhausted memory and filled the disk.** The
+  disk was already near full (about 160 MB free), and swap growth ended in
+  `OSError: No space left on device`. The process died without a traceback.
+  - Depth-4 configs are recorded as failed in `d4_search.csv` and are **not
+    retried**, so selection is among depth-3 trees only. The conclusion "too
+    small to rank" is therefore bounded at depth 3.
+  - Every GOSDT search fit now runs in a spawned subprocess, so a crash costs
+    one config and not the run. The search resumes from its CSV.
+  - The final stage checkpoints after each seed.
+  - Final-stage pickles reference `__main__` classes, because the stage ran as
+    `python -m`. Load them with `d4_interpretable.load_model`.
+- **Environment incident (2026-11-25):** the project sits in iCloud-synced
+  `~/Documents`, and "Optimize Mac Storage" evicted about 63k project files
+  (4.9 GB, including most of `.venv`) while the disk was full. Nothing was
+  lost, but every first read downloads the file, so imports take minutes.
+  **Resolved 2026-11-26:** the project now lives at
+  `~/Projects/internship-project`, outside iCloud.
+  - It was moved by a same-volume rename, with no copy, because only 3.4 GB
+    of disk was free.
+  - The `.venv` is a symlink to `~/.venvs/internship-project`, rebuilt from
+    `requirements.txt`. With the new venv, the C1-R refit checks pass and the
+    D4 s0 models reproduce their saved test predictions exactly (max |diff| 0).
+  - MLflow `artifact_location` and `artifact_uri` were rewritten in
+    `mlflow.db` to the new path. A backup was taken first.
+  - Left behind in the old iCloud folder, still cloud-only:
+    - the old `.venv`, which is obsolete;
+    - `data/raw/repos` (Prowler, Checkov and ScoutSuite clones), already
+      processed into `l2_misconfig_catalog.csv`. Re-clone them from GitHub
+      before re-running A2.
+- **D6 materials generated (2026-11-26):** 24 public CVEs (3 strata × 8),
+  6 formats, a 6×6 Williams Latin square and 144 stimulus cards
+  (`outputs/d6_stimulus_cards.html`). The cards show no KEV status; the
+  answer key is in `d6_stimuli.csv`.
+- **D6 cannot be run here.** It needs CSO engineers. A protocol was written
+  (`reports/d6_human_study_protocol.md`) along with a public-CVE materials
+  generator. No participant data exists, and none is simulated.
+
 ### Environment
 
 - **Python 3.12, not the system default.** `lightgbm`, `xgboost` and
@@ -895,10 +1008,21 @@ at ~100× the compute). EPSS-PIT is the feature that matters; LR beats
 EPSS-PIT on global PR-AUC (+0.0060 [0.0013, 0.0121], C1-R, post-hoc) but no
 model beats it month by month after Holm (C6). Train unweighted; Platt if
 probabilities are needed.
-**Next:** Study D (explainability). Natural primary model: C1-R logistic
-regression (best/indistinguishable from the best, transparent), with C1-R
-XGBoost for TreeSHAP. Pre-register D1–D6 before running. Reuse
-`src/models/study_c_data.py`.
+**STUDY D IS COMPLETE except D6 data collection** (D1–D5 run 2026-11-25,
+pre-registered c0a3ee1; Deviations Log "Study D").
+- **H6 supported:** SHAP and LIME disagree, median τ 0.350 [0.344, 0.354].
+- **The SHAP background matters:** `cvss_version` falls from 51% to 15% of
+  attribution mass with a test-era background (exploratory).
+- **D3:** de-escalation is only via internet exposure (L3); the EPSS trigger
+  is 28× the current value (L1).
+- **D4:** EBM ≈ RuleFit ≈ LR ≈ EPSS-PIT, and a depth-3 optimal tree is far
+  worse. No price of interpretability, because LR is already transparent.
+- **D6:** protocol and materials are ready (`reports/d6_human_study_protocol.md`,
+  `outputs/d6_*`). It needs about 12 CSO engineers and approval. **No
+  participant data exists.**
+
+**Next:** run D6 with participants if approved; otherwise report it as
+designed, not run. Then the thesis draft, due mid-December.
 
 **Read before writing any Study B/C code:**
 - `reports/evaluation_protocol.md` — locked metrics, splits, EPSS rule
@@ -958,6 +1082,12 @@ from CISA KEV. See `src/misconfig/normaliser.py` for the severity mapping and
 - [x] C4: feature ablation + imbalance (+ L3 simulated)
 - [x] C5: calibration (Platt recommended)
 - [x] C6: Friedman/Nemenyi/CD diagrams across 17 methods
+- [x] D1: global XAI (SHAP, permutation importance, ALE, L3 correctness check)
+- [x] D2: local XAI (TreeSHAP/linear SHAP, LIME, 9 case studies)
+- [x] D3: counterfactuals (DiCE on L3, EPSS trigger on L1)
+- [x] D4: interpretable models (EBM, RuleFit, GOSDT)
+- [x] D5: stability and agreement (H6 supported)
+- [ ] D6: human study (protocol and materials done; participants not yet run)
 
 **Update this checklist as experiments complete.**
 

@@ -203,39 +203,62 @@ def fit_predict(kind, config, seed, X_tr, y_tr, X_ev, **kw):
 
 
 # ---------------------------------------------------------------- stages
+def _gosdt_child(bin_path: str, cfg: dict, out_path: str):
+    """Runs in a separate process: GOSDT's native code can die without a Python exception
+    (depth 4 was killed silently in the first D4 run), which must be recorded, not crash D4."""
+    Xb, y, imputer, binarizer, X_eval = pd.read_pickle(bin_path)
+    m = SparseTree(cfg, 0, binarizer=binarizer)
+    t = time.time()
+    m.fit(None, y, Xb=Xb, imputer=imputer)
+    pd.to_pickle((m.predict(X_eval), time.time() - t, m.size()), out_path)
+
+
+def _gosdt_isolated(bin_path, cfg) -> tuple[np.ndarray, float, dict]:
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    out = CACHE_DIR / "d4_gosdt_child_out.pkl"
+    out.unlink(missing_ok=True)
+    with ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("spawn")) as ex:
+        ex.submit(_gosdt_child, str(bin_path), cfg, str(out)).result()  # BrokenProcessPool if killed
+    return pd.read_pickle(out)
+
+
 def search() -> pd.DataFrame:
     from src.tracking import log_experiment
 
     fold = study_c_data.load("v2fold")
-    rows = []
-    gosdt_bin = None
+    path = OUTPUT_DIR / "d4_search.csv"
+    done = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=["kind", "config_id"])
+    # Failed configs are kept as failures and not retried: GOSDT depth 4 exhausted memory, swap filled
+    # the disk ("No space left on device") and took the whole first run down with it.
+    rows = done.to_dict("records")
+    have = {(r["kind"], int(r["config_id"])) for r in rows}
+    bin_path = CACHE_DIR / "d4_gosdt_v2fold_binarised.pkl"
     for kind, grid in GRID.items():
         for cid, cfg in enumerate(grid):
+            if (kind, cid) in have:
+                continue  # resumed: deterministic seed-0 fit already recorded
             logger.info("D4 search %s %s", kind, cfg)
-            kw = {}
-            if kind == "gosdt":
-                if gosdt_bin is None:
-                    t = time.time()
-                    st = SparseTree(cfg, 0)
-                    gosdt_bin = (st.binarize_fit(fold["X_train"], fold["y_train"]), st.imputer, st.binarizer)
-                    logger.info("D4 GOSDT binarisation %.0f s, %d binary features", time.time() - t,
-                                gosdt_bin[0].shape[1])
-                kw = {"Xb": gosdt_bin[0], "imputer": gosdt_bin[1]}
             try:
                 if kind == "gosdt":
-                    m = SparseTree(cfg, 0, binarizer=gosdt_bin[2])
-                    t = time.time()
-                    m.fit(fold["X_train"], fold["y_train"], **kw)
-                    p, sec = m.predict(fold["X_eval"]), time.time() - t
+                    if not bin_path.exists():
+                        t = time.time()
+                        st = SparseTree(cfg, 0)
+                        Xb = st.binarize_fit(fold["X_train"], fold["y_train"])
+                        pd.to_pickle((Xb, fold["y_train"], st.imputer, st.binarizer, fold["X_eval"]), bin_path)
+                        logger.info("D4 GOSDT binarisation %.0f s, %d binary features", time.time() - t, Xb.shape[1])
+                    p, sec, size = _gosdt_isolated(bin_path, cfg)
                 else:
                     m, p, sec = fit_predict(kind, cfg, 0, fold["X_train"], fold["y_train"], fold["X_eval"])
+                    size = m.size()
                 rows.append({"kind": kind, "config_id": cid, "config": json.dumps(cfg),
-                             "val_pr_auc": average_precision(fold["y_eval"], p), "fit_seconds": sec, **m.size()})
+                             "val_pr_auc": average_precision(fold["y_eval"], p), "fit_seconds": sec, **size})
             except Exception as e:  # recorded, never silently dropped
-                logger.warning("D4 search %s %s failed: %s", kind, cfg, e)
+                logger.warning("D4 search %s %s failed: %r", kind, cfg, e)
                 rows.append({"kind": kind, "config_id": cid, "config": json.dumps(cfg), "val_pr_auc": np.nan,
-                             "error": str(e)[:200]})
-            pd.DataFrame(rows).to_csv(OUTPUT_DIR / "d4_search.csv", index=False)
+                             "error": repr(e)[:200]})
+            pd.DataFrame(rows).to_csv(path, index=False)
     res = pd.DataFrame(rows)
     g = res[res.kind == "gosdt"]
     if not (g.get("n_leaves", pd.Series(dtype=float)) > 1).any():
@@ -316,10 +339,41 @@ def final() -> dict:
     return {"summary": summary, "tests": tests}
 
 
+def load_model(path):
+    """Load a cached D4 model. The final stage ran as `python -m`, so its pickles reference
+    `__main__.EBM` etc.; expose the classes there before unpickling."""
+    import __main__
+    for cls in (EBM, RuleFit, SparseTree, WeightedCART):
+        if not hasattr(__main__, cls.__name__):
+            setattr(__main__, cls.__name__, cls)
+    return pd.read_pickle(path)
+
+
+def agreement() -> pd.DataFrame:
+    """EBM global term importance joins D1's Kendall-tau ranking-agreement table (pre-registered)."""
+    from scipy.stats import kendalltau
+
+    d1 = pd.read_csv(OUTPUT_DIR / "d1_shap_mean_abs.csv", index_col="feature")
+    perm = pd.read_csv(OUTPUT_DIR / "d1_permutation_importance.csv")
+    perm = perm[~perm.unit.str.startswith("GROUP:")].pivot(index="unit", columns="model",
+                                                             values="pr_auc_drop_mean")
+    ebm = pd.read_csv(OUTPUT_DIR / "d4_ebm_term_importance.csv", index_col=0)["importance"]
+    feats = d1.index
+    rankings = {"SHAP M-XGB": d1["M-XGB"], "SHAP M-LR": d1["M-LR"],
+                "PermImp M-XGB": perm["M-XGB"].reindex(feats), "PermImp M-LR": perm["M-LR"].reindex(feats),
+                "EBM term importance": ebm.reindex(feats)}
+    assert not rankings["EBM term importance"].isna().any(), "EBM terms must match D1 features"
+    names = list(rankings)
+    agree = pd.DataFrame({a: [kendalltau(rankings[a], rankings[b]).statistic for b in names] for a in names},
+                         index=names)
+    agree.to_csv(OUTPUT_DIR / "d4_global_ranking_agreement.csv")
+    return agree
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", choices=["search", "final", "all"], default="all")
+    parser.add_argument("--stage", choices=["search", "final", "agreement", "all"], default="all")
     stage = parser.parse_args().stage
     pd.set_option("display.width", 250)
     if stage in ("search", "all"):
@@ -328,3 +382,5 @@ if __name__ == "__main__":
         out = final()
         print(out["summary"].to_string())
         print(out["tests"].round(4).to_string())
+    if stage in ("agreement", "all"):
+        print(agreement().round(3).to_string())
